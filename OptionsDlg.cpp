@@ -42,12 +42,33 @@ struct DlgState {
     HWND hBtnTest = nullptr, hBtnClearHistory = nullptr;
 };
 
+// 取窗口 DPI（动态加载 GetDpiForWindow，老系统回退到 GetDeviceCaps）
+static UINT GetWindowDpi(HWND hWnd) {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32 && hWnd) {
+        typedef UINT(WINAPI* PFN_GetDpiForWindow)(HWND);
+        auto pfn = (PFN_GetDpiForWindow)GetProcAddress(user32, "GetDpiForWindow");
+        if (pfn) {
+            UINT d = pfn(hWnd);
+            if (d) return d;
+        }
+    }
+    HDC dc = GetDC(hWnd);   // hWnd 为 NULL 时返回屏幕 DC
+    UINT d = dc ? (UINT)GetDeviceCaps(dc, LOGPIXELSX) : 96;
+    if (dc) ReleaseDC(hWnd, dc);
+    return d ? d : 96;
+}
+
 static void CreateControls(HWND hWnd, DlgState* st) {
     HINSTANCE hInst = (HINSTANCE)GetWindowLongPtrW(hWnd, GWLP_HINSTANCE);
     
-    // 创建更大的字体 - 14pt 便于阅读
+    // DPI 自适应：按窗口 DPI 缩放坐标与字体，4K/高分屏下不再偏小
+    UINT dpi = GetWindowDpi(hWnd);
+    auto S = [dpi](int v) { return MulDiv(v, dpi, 96); };
+
+    // 字体（基础 15px，随 DPI 缩放）
     LOGFONTW lf = {};
-    lf.lfHeight = -14;  // 14pt
+    lf.lfHeight = -MulDiv(15, dpi, 96);
     lf.lfWeight = FW_NORMAL;
     wcscpy_s(lf.lfFaceName, L"微软雅黑");
     HFONT hFont = CreateFontIndirectW(&lf);
@@ -56,7 +77,7 @@ static void CreateControls(HWND hWnd, DlgState* st) {
     auto addCtrl = [&](LPCWSTR cls, LPCWSTR text, DWORD style,
                        int x, int y, int w, int h, int id) -> HWND {
         HWND hw = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style,
-                                  x, y, w, h, hWnd, (HMENU)(intptr_t)id, hInst, NULL);
+                                  S(x), S(y), S(w), S(h), hWnd, (HMENU)(intptr_t)id, hInst, NULL);
         if (hw && hFont) SendMessageW(hw, WM_SETFONT, (WPARAM)hFont, TRUE);
         return hw;
     };
@@ -252,8 +273,10 @@ bool COptionsDlg::Show(HWND hParent) {
 
     DlgState state;
 
-    // 计算居中坐标 - 宽敞的大窗口布局
-    int W = 520, H = 540;  
+    // 计算居中坐标 - 宽敞的大窗口布局（按 DPI 缩放）
+    UINT dpi = GetWindowDpi(hParent ? hParent : nullptr);
+    int W = MulDiv(520, dpi, 96);
+    int H = MulDiv(540, dpi, 96);
     int px = CW_USEDEFAULT, py = CW_USEDEFAULT;
     if (hParent) {
         RECT rc{};
