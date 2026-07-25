@@ -220,6 +220,14 @@ void CDashboardDlg::Show(HWND hParent, CMijiaPowerPlugin* plugin) {
         py = rc.top + (rc.bottom - rc.top - H) / 2;
         if (px < 0) px = 0; if (py < 0) py = 0;
     }
+    // 优先按主屏幕居中（避免父窗口在屏幕边缘时仪表盘也跟着偏到边缘/不便拖动）
+    {
+        int sw = GetSystemMetrics(SM_CXSCREEN);
+        int sh = GetSystemMetrics(SM_CYSCREEN);
+        int cx = (sw - W) / 2, cy = (sh - H) / 2;
+        if (cx > 0 && cy > 0) { px = cx; py = cy; }
+    }
+    if (px < 0) px = 0; if (py < 0) py = 0;
 
     Ctx* ctx = new Ctx();
     ctx->plugin = plugin;
@@ -231,6 +239,7 @@ void CDashboardDlg::Show(HWND hParent, CMijiaPowerPlugin* plugin) {
     if (!hWnd) { delete ctx; return; }
     g_hDashboard = hWnd;
     ShowWindow(hWnd, SW_SHOW);
+    SetForegroundWindow(hWnd);   // 确保激活，标题栏可正常拖动
     UpdateWindow(hWnd);
 }
 
