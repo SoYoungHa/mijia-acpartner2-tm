@@ -401,19 +401,18 @@ void CDashboardDlg::DrawCharts(HWND hWnd, Ctx* ctx) {
     HDC hdc = BeginPaint(hWnd, &ps);
     if (g_hFont) SelectObject(hdc, g_hFont);
 
-    // 头部：标题 + 状态（画布绘制）
-    {
-        Font fT(hdc, g_hFontTitle), fN(hdc, g_hFont);
-        SolidBrush tBr(C(g_theme.text)), sBr(C(g_theme.sub));
-        Graphics gg(hdc);
-        gg.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
-        gg.DrawString(L"米家空调伴侣", -1, &fT, PointF((REAL)S(20), (REAL)S(12)), &tBr);
-        std::wstring st = L"设备：" + ConfigManager::Instance().Get().deviceName;
-        st += ctx->plugin->IsConnected() ? L"  ● 已连接" : L"  ○ 未连接";
-        st += L"   当前 " + std::to_wstring((int)ctx->plugin->GetCurrentWatts()) + L"W";
-        st += L"   今日 " + std::to_wstring(ctx->plugin->GetTodayKwh()) + L"度";
-        gg.DrawString(st.c_str(), -1, &fN, PointF((REAL)S(20), (REAL)S(38)), &sBr);
-    }
+    // 头部：标题 + 状态（GDI TextOutW，对 4K 高 DPI 混合中英文最稳；GDI+ DrawString 在 4K CJK+Latin 易重叠）
+    SetBkMode(hdc, TRANSPARENT);
+    SelectObject(hdc, g_hFontTitle);
+    SetTextColor(hdc, g_theme.text);
+    TextOutW(hdc, S(20), S(12), L"米家空调伴侣", 6);
+    SelectObject(hdc, g_hFont);
+    SetTextColor(hdc, g_theme.sub);
+    std::wstring st = L"设备：" + ConfigManager::Instance().Get().deviceName
+        + (ctx->plugin->IsConnected() ? L"  ●已连接" : L"  ○未连接")
+        + L"  " + std::to_wstring((int)ctx->plugin->GetCurrentWatts()) + L"W"
+        + L"  今日" + std::to_wstring(ctx->plugin->GetTodayKwh()) + L"度";
+    TextOutW(hdc, S(20), S(38), st.c_str(), (int)st.size());
 
     std::vector<double> powerYs, energyYs;
     double t0, t1, todayKwh;
