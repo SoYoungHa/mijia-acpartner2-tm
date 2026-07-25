@@ -64,6 +64,9 @@ public:
     explicit MiioDevice(const std::string& ip, const std::string& token, int timeoutMs = 5000);
     ~MiioDevice() = default;
 
+    // 调试日志：记录 get/set_properties 的原始请求与响应（设为空串则关闭）
+    static void SetDebugLogPath(const std::wstring& path) { s_debugLogPath = path; }
+
     bool Handshake();
     bool IsHandshaked() const { return m_handshaked; }
 
@@ -105,4 +108,7 @@ private:
     bool UdpSendRecv(const std::vector<unsigned char>& sendBuf,
                      std::vector<unsigned char>& recvBuf, int recvMax = 4096);
     unsigned int CurrentStamp() const;
+
+    static std::wstring s_debugLogPath;
+    static void DebugLog(const std::string& s);
 };
