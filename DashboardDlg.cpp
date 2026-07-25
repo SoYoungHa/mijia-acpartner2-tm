@@ -498,9 +498,18 @@ void CDashboardDlg::DrawCharts(HWND hWnd, Ctx* ctx) {
     UINT dpi = GetWindowDpi(hWnd);
     auto S = [dpi](int v) { return (int)(MulDiv(v, dpi, 96) * g_scale); };
 
-    PAINTSTRUCT ps;
+PAINTSTRUCT ps;
     HDC hdc = BeginPaint(hWnd, &ps);
     if (g_hFont) SelectObject(hdc, g_hFont);
+
+    // 清除头部区域旧文字（timer 每 2s 刷新用 FALSE 不擦除，旧数字残留会与新数字重叠）
+    {
+        RECT crc; GetClientRect(hWnd, &crc);
+        RECT hdr = { 0, 0, crc.right, S(58) };
+        HBRUSH hb = CreateSolidBrush(g_theme.bg);
+        FillRect(hdc, &hdr, hb);
+        DeleteObject(hb);
+    }
 
     // 头部：标题 + 状态（GDI TextOutW，对 4K 高 DPI 混合中英文最稳；GDI+ DrawString 在 4K CJK+Latin 易重叠）
     SetBkMode(hdc, TRANSPARENT);
