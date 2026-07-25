@@ -231,7 +231,7 @@ void CDashboardDlg::Show(HWND hParent, CMijiaPowerPlugin* plugin) {
     Ctx* ctx = new Ctx();
     ctx->plugin = plugin;
 
-    HWND hWnd = CreateWindowExW(0, L"MijiaDashboardWnd",
+    HWND hWnd = CreateWindowExW(WS_EX_APPWINDOW, L"MijiaDashboardWnd",
         L"米家空调伴侣 · 图表与控制",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         px, py, W, H, hParent, NULL, hInst, ctx);
