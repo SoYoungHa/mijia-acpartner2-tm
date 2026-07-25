@@ -30,42 +30,24 @@
 > 电量图为本地按功率积分估算值，非设备电表读数；如需精确电量以米家 App 为准。
 
 ### 空调控制
-面板下方为控制区。**首次使用前请在「选项」中勾选「启用空调控制」**，并确认 siid/piid 映射正确。
-- **开关机**：走 miIO 旧协议 `set_power`（对空调伴侣最可靠，红外转发）。
-- **温度 / 模式 / 风速 / 摆风**：走 MIoT SPEC `set_properties`，默认映射按 `lumi.acpartner.mcn02`。
+面板下方为控制区。**首次使用前请在「选项」中勾选「启用空调控制」**。
+- **开关机**：走 miIO 旧协议 `set_power`（红外转发，最可靠）。
+- **温度 / 模式 / 风速 / 摆风**：走 lumi 空调伴侣旧协议 `get_model_and_state` + `send_cmd`（v1.2.0 起）。
 
-> ⚠️ 不同固件/型号的 siid/piid 可能不同。若调节温度/模式无效（面板会显示设备返回的错误码），请用下面的方法核对并修改。
+> ⚠️ `lumi.acpartner.mcn02` **不支持** MIoT SPEC `get_properties`/`set_properties` 走局域网（会返回错误码 -1）。本插件因此改用空调伴侣原生的 `get_model_and_state`（读取 AC 型号码与位编码状态串）+ `send_cmd`（下发控制码）来控温/模式/风速/摆风，与 homebridge-mi-acpartner 同一协议。开关机仍用 `set_power`。
 
-#### 如何核对 siid/piid（推荐）
-安装 python-miio 后执行（替换 IP / Token）：
-```bash
-pip install python-miio
-miiocli genericmiot --ip 192.168.1.100 --token <你的Token> status
+**状态串编码**（`get_model_and_state` 返回的第 2 个字符串）：
 ```
-输出会列出每个属性的 `siid`/`piid`，例如：
+[2前缀][power][mode][fan][1-swing][temp(16进制2位)][led]...
+   位置:   2      3     4      5        6-7        8
 ```
-Target Temperature (air-conditioner:target-temperature, access: RW) ... (siid=2, piid=3)
-```
-将 `模式/温度/风速/摆风` 对应的 siid/piid 填入插件「选项」的「空调控制」分组，或在 `MijiaPower.ini` 的 `[ACMap]` 段修改：
-```ini
-[AC]
-EnableControl=1
-[ACMap]
-ModeSiid=2
-ModePiid=2
-TempSiid=2
-TempPiid=3
-FanSiid=3
-FanPiid=1
-SwingSiid=3
-SwingPiid=2
-```
+设置时插件读取当前状态串，仅修改目标字段后用 `send_cmd` 下发 `model前缀 + 状态串尾段`。
 
-> ℹ️ 以上为 `lumi.acpartner.mcn02` 官方 SPEC 映射：空调服务 `air-conditioner(#2)` 含 mode(2/2)、target-temperature(2/3, float)；风机服务 `fan-control(#3)` 含 fan-level(3/1)、vertical-swing(3/2, bool)。旧版本误把 fan/swing 设为 siid=2，v1.1.1 起已修正，并在加载时自动迁移旧配置。
+> ℹ️ `[ACMap]` 的 siid/piid 字段为早期 SPEC 方案保留，对 mcn02 旧协议模式不再使用，可忽略。
 
-面板上的 **测试指令** 按钮会读取一次状态并返回码：`0` 表示映射正确。
+面板上的 **测试指令** 按钮会读取一次状态：成功则显示当前 模式/温度/风速/摆风。
 
-> 🔍 排查：若调节仍无效，插件会在配置目录生成 `MijiaPower_debug.log`，记录每次 `get_properties`/`set_properties` 的原始请求与设备响应，可据此核对 siid/piid 或错误码。
+> 🔍 排查：若调节仍无效，插件会在配置目录生成 `MijiaPower_debug.log`，记录每次 `get_model_and_state`/`send_cmd` 的原始请求与设备响应，可据此定位问题。
 
 ---
 
