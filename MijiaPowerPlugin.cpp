@@ -347,7 +347,7 @@ const wchar_t* CMijiaPowerPlugin::GetInfo(PluginInfoIndex index) {
     case TMI_AUTHOR:      return L"MijiaPlug";
     case TMI_COPYRIGHT:   return L"2024 MijiaPlug";
     case TMI_URL:         return L"";
-    case TMI_VERSION:     return L"1.2.1";
+    case TMI_VERSION:     return L"1.3.0";
     default:              return L"";
     }
 }
