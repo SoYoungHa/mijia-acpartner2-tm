@@ -110,9 +110,11 @@ static HWND AddCtrl(HWND parent, LPCWSTR cls, LPCWSTR text, DWORD style,
     return hw;
 }
 
-// ─── 内容居中：全屏/拉宽时左右留白 ───
+// ─── 内容居中 + 整页随窗口缩放 ───
 static const int NATURAL_W = 840;   // 自然宽度（逻辑像素）
-static int  g_ox = 0;               // 当前内容水平偏移
+static const int NATURAL_H = 720;   // 自然高度（逻辑像素，保持 7:6 比例）
+static int  g_ox = 0;               // 当前内容水平偏移（居中）
+static float g_scale = 1.0f;        // 当前缩放比例 = clientW / 自然宽物理像素
 
 struct CL { int id; int lx, ly, lw, lh; };
 static const CL g_cl[] = {
@@ -138,7 +140,7 @@ static const CL g_cl[] = {
 
 static void RecenterControls(HWND hWnd) {
     UINT dpi = GetWindowDpi(hWnd);
-    auto S = [dpi](int v) { return MulDiv(v, dpi, 96); };
+    auto S = [dpi](int v) { return (int)(MulDiv(v, dpi, 96) * g_scale); };
     RECT crc; GetClientRect(hWnd, &crc);
     int natW = S(NATURAL_W);
     int ox = (crc.right > natW) ? (crc.right - natW) / 2 : 0;
@@ -147,6 +149,29 @@ static void RecenterControls(HWND hWnd) {
     for (const auto& c : g_cl) {
         HWND hw = GetDlgItem(hWnd, c.id);
         if (hw) MoveWindow(hw, ox + S(c.lx), S(c.ly), S(c.lw), S(c.lh), TRUE);
+    }
+}
+
+// 重建字体（g_scale 变化时调用，让控件字体也随窗口缩放）
+static void RecreateFonts(HWND hWnd) {
+    if (g_hFont)      { DeleteObject(g_hFont);      g_hFont = nullptr; }
+    if (g_hFontBig)   { DeleteObject(g_hFontBig);   g_hFontBig = nullptr; }
+    if (g_hFontTitle) { DeleteObject(g_hFontTitle); g_hFontTitle = nullptr; }
+    UINT dpi = GetWindowDpi(hWnd);
+    auto mk = [&](int px, int w) {
+        LOGFONTW lf = {};
+        lf.lfHeight = -MulDiv((int)(px * g_scale), dpi, 96);
+        lf.lfWeight = w;
+        wcscpy_s(lf.lfFaceName, L"Segoe UI");
+        HFONT f = CreateFontIndirectW(&lf);
+        return f ? f : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    };
+    g_hFont      = mk(14, FW_NORMAL);
+    g_hFontBig   = mk(26, FW_BOLD);
+    g_hFontTitle = mk(18, FW_SEMIBOLD);
+    for (const auto& c : g_cl) {
+        HWND hw = GetDlgItem(hWnd, c.id);
+        if (hw) SendMessageW(hw, WM_SETFONT, (WPARAM)g_hFont, TRUE);
     }
 }
 
@@ -212,11 +237,11 @@ void CDashboardDlg::Show(HWND hParent, CMijiaPowerPlugin* plugin) {
 // ─── 初始化控件 ───
 void CDashboardDlg::OnInitDialog(HWND hWnd, Ctx* ctx) {
     UINT dpi = GetWindowDpi(hWnd);
-    auto S = [dpi](int v) { return MulDiv(v, dpi, 96); };
+    auto S = [dpi](int v) { return (int)(MulDiv(v, dpi, 96) * g_scale); };
 
     auto mkFont = [&](int px, int weight, bool big = false) {
         LOGFONTW lf = {};
-        lf.lfHeight = -MulDiv(px, dpi, 96);
+        lf.lfHeight = -MulDiv((int)(px * g_scale), dpi, 96);
         lf.lfWeight = weight;
         wcscpy_s(lf.lfFaceName, L"Segoe UI");
         HFONT f = CreateFontIndirectW(&lf);
@@ -357,7 +382,7 @@ void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
     g.DrawPath(&borderPen, card);
     delete card;
 
-    int padL = 48, padR = 16, padT = 30, padB = 22;
+    int padL = 48, padR = 16, padT = 30, padB = 28;   // padB 加大给日期标签留够空间
     int plotW = (rc.right - rc.left) - padL - padR;
     int plotH = (rc.bottom - rc.top) - padT - padB;
     if (plotW < 20) plotW = 20;
@@ -438,9 +463,10 @@ void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
     SolidBrush dot(C(line));
     g.FillEllipse(&dot, pts[n-1].X - 3.5f, pts[n-1].Y - 3.5f, 7.0f, 7.0f);
 
-    // X 轴时间/日期标签
+    // X 轴时间/日期标签（用主题文字色更醒目，位置上移避免被切）
     if (t1 > t0 && plotW > 60) {
         int xTicks = 5;
+        SolidBrush axisBrush(C(g_theme.text));   // 用正文色，醒目
         StringFormat xf; xf.SetAlignment(StringAlignmentCenter);
         for (int i = 0; i <= xTicks; ++i) {
             double frac = (double)i / xTicks;
@@ -450,8 +476,8 @@ void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
             if (winSec <= 86400) swprintf_s(lb, L"%02d:%02d", tmv.tm_hour, tmv.tm_min);
             else                 swprintf_s(lb, L"%d/%d", tmv.tm_mon + 1, tmv.tm_mday);
             REAL xx = (REAL)(px + plotW * frac);
-            RectF box(xx - 30, (REAL)(py2 + 4), 60, 16);
-            g.DrawString(lb, -1, &font, box, &xf, &subBrush);
+            RectF box(xx - 36, (REAL)(py2 + 3), 72, 18);
+            g.DrawString(lb, -1, &font, box, &xf, &axisBrush);
         }
     }
 }
@@ -459,7 +485,7 @@ void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
 // ─── 绘制两张图 + 头部 ───
 void CDashboardDlg::DrawCharts(HWND hWnd, Ctx* ctx) {
     UINT dpi = GetWindowDpi(hWnd);
-    auto S = [dpi](int v) { return MulDiv(v, dpi, 96); };
+    auto S = [dpi](int v) { return (int)(MulDiv(v, dpi, 96) * g_scale); };
 
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(hWnd, &ps);
@@ -671,10 +697,29 @@ LRESULT CALLBACK CDashboardDlg::DlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
     case WM_TIMER:
         if (ctx) OnTimer(hWnd, ctx);
         break;
-    case WM_SIZE:
-        RecenterControls(hWnd);   // 窗口大小变化：控件水平居中
-        InvalidateRect(hWnd, NULL, TRUE);   // 擦除旧画布，画布以新 ox 重绘（避免残留）
+    case WM_SIZE: {
+        int newW = LOWORD(lParam);
+        int newH = HIWORD(lParam);
+        if (newW <= 0) break;
+        UINT dpi = GetWindowDpi(hWnd);
+        int natW_phys = MulDiv(NATURAL_W, dpi, 96);
+        float newScale = (float)newW / natW_phys;
+        if (newScale < 0.75f) newScale = 0.75f;
+        if (newScale > 2.5f) newScale = 2.5f;
+        bool scaleChanged = fabsf(newScale - g_scale) > 0.02f;
+        g_scale = newScale;
+        // 维持宽高比：按自然比例重设高度
+        int wantH = (int)(MulDiv(NATURAL_H, dpi, 96) * g_scale);
+        if (wantH < 200) wantH = 200;
+        if (newH != wantH) {
+            RECT wr; GetWindowRect(hWnd, &wr);
+            SetWindowPos(hWnd, NULL, wr.left, wr.top, newW, wantH, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        if (scaleChanged) RecreateFonts(hWnd);
+        RecenterControls(hWnd);   // 按新 g_scale 重新居中控件
+        InvalidateRect(hWnd, NULL, TRUE);
         break;
+    }
     case WM_PAINT:
         if (ctx) DrawCharts(hWnd, ctx);
         else { PAINTSTRUCT ps; BeginPaint(hWnd,&ps); EndPaint(hWnd,&ps); }
