@@ -87,6 +87,10 @@ public:
     bool GetModelAndState(std::string& outModel, std::string& outState, int& outPower);
     bool SendCmd(const std::string& code);       // send_cmd ["code"] -> 成功返回 ["ok"]
 
+    // lumi.acpartner.mcn02 协议：get_prop 命名属性读状态；set_xxx 下发
+    bool GetAcStatus(std::vector<std::string>& outValues);  // get_prop 6 项 -> ["on","cool",28,"small_fan","on",441.0]
+    bool SendAcSet(const std::string& method, const std::string& paramsJson);  // set_tar_temp/set_mode/... -> ["ok"]
+
     // MIoT SPEC：批量读/写属性
     bool GetProperties(const std::vector<MiioProperty>& props, std::string& outResult);
     bool SetProperties(const std::vector<MiioPropValue>& vals,  std::string& outResult);
