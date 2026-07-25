@@ -376,7 +376,8 @@ void CDashboardDlg::BuildSeries(Ctx* ctx, std::vector<double>& powerYs,
 void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
                               double yMax, const wchar_t* title,
                               const wchar_t* unit, double curVal, COLORREF line,
-                              double t0, double t1, int winSec) {
+                              double t0, double t1, int winSec,
+                              const wchar_t* yFmt) {
     Graphics g(hdc);
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
@@ -408,7 +409,7 @@ void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
     // 当前值徽章（右上）
     wchar_t buf[64];
     if (ys.empty()) swprintf_s(buf, L"— %ls", unit);
-    else swprintf_s(buf, L"%.1f %ls", curVal, unit);
+    else swprintf_s(buf, (std::wstring(yFmt) + L" %ls").c_str(), curVal, unit);
     Font fontV(hdc, g_hFont);
     RectF vbox; g.MeasureString(buf, -1, &fontV, PointF(0,0), &vbox);
     REAL bw = vbox.Width + 20, bh = 22;
@@ -429,7 +430,7 @@ void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
     for (int i = 0; i <= gridN; ++i) {
         int yy = py + (int)(plotH * i / (double)gridN);
         g.DrawLine(&gridPen, px, yy, px2, yy);
-        wchar_t lb[32]; swprintf_s(lb, L"%.1f", yMax * (gridN - i) / (double)gridN);
+        wchar_t lb[32]; swprintf_s(lb, yFmt, yMax * (gridN - i) / (double)gridN);
         g.DrawString(lb, -1, &font, PointF((REAL)(rc.left + 6), (REAL)(yy - 8)), &subBrush);
     }
 
@@ -549,9 +550,9 @@ PAINTSTRUCT ps;
         ctx->winSec <= 3600 ? L"近1小时" : ctx->winSec <= 86400 ? L"近24小时" : L"近7天";
 
     DrawChart(hdc, prc, powerYs, pMax, (std::wstring(L"功率  ") + winName).c_str(),
-              L"W", ctx->plugin->GetCurrentWatts(), g_theme.powerLine, t0, t1, ctx->winSec);
+              L"W", ctx->plugin->GetCurrentWatts(), g_theme.powerLine, t0, t1, ctx->winSec, L"%.1f");
     DrawChart(hdc, erc, energyYs, eMax, (std::wstring(L"电量  ") + winName).c_str(),
-              L"度", energyYs.empty() ? 0.0 : energyYs.back(), g_theme.energyLine, t0, t1, ctx->winSec);
+              L"度", energyYs.empty() ? 0.0 : energyYs.back(), g_theme.energyLine, t0, t1, ctx->winSec, L"%.3f");
 
     // AC 控制卡片边框
     {
