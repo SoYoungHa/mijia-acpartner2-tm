@@ -2,6 +2,7 @@
 #include "pch.h"
 #include "MijiaPowerPlugin.h"
 #include "OptionsDlg.h"
+#include "DashboardDlg.h"
 #include <sstream>
 #include <iomanip>
 
@@ -15,6 +16,10 @@ ITMPlugin* TMPluginGetInstance() {
     if (!g_pluginInstance) {
         g_pluginInstance = new CMijiaPowerPlugin();
     }
+    return g_pluginInstance;
+}
+
+CMijiaPowerPlugin* MijiaPluginInstance() {
     return g_pluginInstance;
 }
 
@@ -71,6 +76,24 @@ const wchar_t* CPowerItem::GetItemValueText() const {
     if (cfg.showUnit) oss << L"W";
     m_valueText = oss.str();
     return m_valueText.c_str();
+}
+
+// 任务栏内联功率迷你图：将当前功率归一化到 0..1（按 0~3000W 量程）
+float CPowerItem::GetResourceUsageGraphValue() const {
+    if (!m_plugin) return 0.0f;
+    double w = m_plugin->GetCurrentWatts();
+    float v = (float)(w / 3000.0);
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    return v;
+}
+
+int CPowerItem::OnMouseEvent(MouseEventType type, int x, int y, void* hWnd, int flag) {
+    if (type == MT_DBCLICKED && m_plugin) {
+        m_plugin->OpenDashboard((HWND)hWnd);
+        return 1;
+    }
+    return 0;
 }
 
 // ═══════════════════════════════════════════════
@@ -317,12 +340,12 @@ void CMijiaPowerPlugin::DataRequired() {
 
 const wchar_t* CMijiaPowerPlugin::GetInfo(PluginInfoIndex index) {
     switch (index) {
-    case TMI_NAME:        return L"米家插座功率";
-    case TMI_DESCRIPTION: return L"实时显示米家/酷控智能插座的功率，支持历史记录";
+    case TMI_NAME:        return L"米家空调伴侣";
+    case TMI_DESCRIPTION: return L"实时功率/用电，支持功率图与电量图，并可电脑控制空调（开关/温度/模式/风速/摆风）";
     case TMI_AUTHOR:      return L"MijiaPlug";
     case TMI_COPYRIGHT:   return L"2024 MijiaPlug";
     case TMI_URL:         return L"";
-    case TMI_VERSION:     return L"1.0.0";
+    case TMI_VERSION:     return L"1.1.0";
     default:              return L"";
     }
 }
@@ -341,6 +364,202 @@ ITMPlugin::OptionReturn CMijiaPowerPlugin::ShowOptionsDialog(void* hParent) {
         return OR_OPTION_CHANGED;
     }
     return OR_OPTION_UNCHANGED;
+}
+
+// ─── 空调控制辅助 ───
+namespace {
+    // ASCII std::string -> std::wstring（model 等均为 ASCII）
+    std::wstring S2WS(const std::string& s) {
+        std::wstring w; w.reserve(s.size());
+        for (char c : s) w.push_back((wchar_t)(unsigned char)c);
+        return w;
+    }
+    // 解析属性值（可能是数字、浮点或带引号的字符串）为整数
+    bool ToIntVal(const std::string& v, int& out) {
+        if (v.empty()) return false;
+        std::string t = v;
+        // 去掉首尾引号与空白
+        size_t a = 0, b = t.size();
+        while (a < b && (t[a] == '"' || t[a] == ' ' || t[a] == '\t')) a++;
+        while (b > a && (t[b-1] == '"' || t[b-1] == ' ' || t[b-1] == '\t')) b--;
+        if (a >= b) return false;
+        try { out = (int)std::stod(t.substr(a, b - a)); return true; }
+        catch (...) { return false; }
+    }
+}
+
+bool CMijiaPowerPlugin::AcEnsureConnectedLocked() {
+    if (m_device) { m_connected = true; return true; }
+    auto& cfg = ConfigManager::Instance().Get();
+    if (cfg.deviceIp.empty() || cfg.deviceToken.empty()) return false;
+    char ip[256], token[256];
+    WideCharToMultiByte(CP_ACP, 0, cfg.deviceIp.c_str(),    -1, ip,    256, NULL, NULL);
+    WideCharToMultiByte(CP_ACP, 0, cfg.deviceToken.c_str(), -1, token, 256, NULL, NULL);
+    try {
+        auto dev = std::make_unique<MiioDevice>(ip, token, 5000);
+        double w = 0;
+        if (dev->GetPower(w)) {
+            m_device = std::move(dev);
+            m_connected = true;
+            m_currentWatts = w;
+            return true;
+        }
+    } catch (...) {}
+    return false;
+}
+
+bool CMijiaPowerPlugin::AcEnsureConnected() {
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    return AcEnsureConnectedLocked();
+}
+
+bool CMijiaPowerPlugin::DeviceGetProperties(const std::vector<MiioProperty>& props, std::string& outResult) {
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    if (!m_device) return false;
+    return m_device->GetProperties(props, outResult);
+}
+
+bool CMijiaPowerPlugin::DeviceSetProperties(const std::vector<MiioPropValue>& vals, std::string& outResult) {
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    if (!m_device) return false;
+    return m_device->SetProperties(vals, outResult);
+}
+
+int CMijiaPowerPlugin::ParseFirstCode(const std::string& result) {
+    // 在 result 数组内找第一个 "code":
+    auto p = result.find("\"result\"");
+    std::string arr = (p == std::string::npos) ? result : result.substr(p + 8);
+    auto c = arr.find("\"code\"");
+    if (c == std::string::npos) return -1;
+    try { return std::stoi(arr.substr(c + 6)); } catch (...) { return -1; }
+}
+
+bool CMijiaPowerPlugin::AcSetPower(bool on, AcState& out) {
+    out.lastError.clear(); out.lastCode = 0;
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    if (!m_device && !AcEnsureConnectedLocked()) { out.lastError = L"设备未连接"; return false; }
+    if (!m_device->SetPower(on)) { out.lastError = L"开关机指令发送失败"; return false; }
+    out.power = on ? 1 : 0;
+    return true;
+}
+
+bool CMijiaPowerPlugin::AcGetPowerState(int& out) {
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    if (!m_device && !AcEnsureConnectedLocked()) return false;
+    std::string s;
+    if (!m_device->GetPowerState(s)) return false;
+    out = (s == "on") ? 1 : 0;
+    return true;
+}
+
+bool CMijiaPowerPlugin::AcRefreshState(AcState& out) {
+    out.lastError.clear(); out.lastCode = 0;
+    auto& cfg = ConfigManager::Instance().Get();
+    if (!cfg.enableAcControl) { out.lastError = L"空调控制未启用"; return false; }
+    if (!AcEnsureConnected()) { out.lastError = L"读取失败：设备未连接"; return false; }
+
+    std::vector<MiioProperty> props = {
+        { cfg.acModeSiid,  cfg.acModePiid },
+        { cfg.acTempSiid,  cfg.acTempPiid },
+        { cfg.acFanSiid,   cfg.acFanPiid },
+        { cfg.acSwingSiid, cfg.acSwingPiid },
+    };
+    std::string result;
+    if (!DeviceGetProperties(props, result)) {
+        out.lastError = L"读取失败：通信错误"; return false;
+    }
+    auto parsed = MiioDevice::ParsePropResults(result);
+    if (parsed.empty()) {
+        out.lastCode = -1;
+        out.lastError = L"设备未返回属性（siid/piid 可能不正确）";
+        return false;
+    }
+    for (auto& r : parsed) {
+        if (r.code != 0) { out.lastCode = r.code; out.lastError = L"设备返回错误码 " + std::to_wstring(r.code); }
+        if (r.siid == cfg.acModeSiid && r.piid == cfg.acModePiid)        ToIntVal(r.value, out.mode);
+        else if (r.siid == cfg.acTempSiid && r.piid == cfg.acTempPiid)   ToIntVal(r.value, out.temp);
+        else if (r.siid == cfg.acFanSiid  && r.piid == cfg.acFanPiid)    ToIntVal(r.value, out.fan);
+        else if (r.siid == cfg.acSwingSiid && r.piid == cfg.acSwingPiid) ToIntVal(r.value, out.swing);
+    }
+    return true;
+}
+
+bool CMijiaPowerPlugin::AcSetTemp(int t, AcState& out) {
+    out.lastError.clear(); out.lastCode = 0;
+    auto& cfg = ConfigManager::Instance().Get();
+    if (!AcEnsureConnected()) { out.lastError = L"设置失败：设备未连接"; return false; }
+    std::vector<MiioPropValue> vals = { { cfg.acTempSiid, cfg.acTempPiid, std::to_string(t) } };
+    std::string result;
+    if (!DeviceSetProperties(vals, result)) { out.lastError = L"设置失败：通信错误"; return false; }
+    int code = ParseFirstCode(result); out.lastCode = code;
+    if (code != 0) { out.lastError = L"设备返回错误码 " + std::to_wstring(code); return false; }
+    out.temp = t; return true;
+}
+
+bool CMijiaPowerPlugin::AcSetMode(int m, AcState& out) {
+    out.lastError.clear(); out.lastCode = 0;
+    auto& cfg = ConfigManager::Instance().Get();
+    if (!AcEnsureConnected()) { out.lastError = L"设置失败：设备未连接"; return false; }
+    std::vector<MiioPropValue> vals = { { cfg.acModeSiid, cfg.acModePiid, std::to_string(m) } };
+    std::string result;
+    if (!DeviceSetProperties(vals, result)) { out.lastError = L"设置失败：通信错误"; return false; }
+    int code = ParseFirstCode(result); out.lastCode = code;
+    if (code != 0) { out.lastError = L"设备返回错误码 " + std::to_wstring(code); return false; }
+    out.mode = m; return true;
+}
+
+bool CMijiaPowerPlugin::AcSetFan(int f, AcState& out) {
+    out.lastError.clear(); out.lastCode = 0;
+    auto& cfg = ConfigManager::Instance().Get();
+    if (!AcEnsureConnected()) { out.lastError = L"设置失败：设备未连接"; return false; }
+    std::vector<MiioPropValue> vals = { { cfg.acFanSiid, cfg.acFanPiid, std::to_string(f) } };
+    std::string result;
+    if (!DeviceSetProperties(vals, result)) { out.lastError = L"设置失败：通信错误"; return false; }
+    int code = ParseFirstCode(result); out.lastCode = code;
+    if (code != 0) { out.lastError = L"设备返回错误码 " + std::to_wstring(code); return false; }
+    out.fan = f; return true;
+}
+
+bool CMijiaPowerPlugin::AcSetSwing(int s, AcState& out) {
+    out.lastError.clear(); out.lastCode = 0;
+    auto& cfg = ConfigManager::Instance().Get();
+    if (!AcEnsureConnected()) { out.lastError = L"设置失败：设备未连接"; return false; }
+    std::vector<MiioPropValue> vals = { { cfg.acSwingSiid, cfg.acSwingPiid, std::to_string(s) } };
+    std::string result;
+    if (!DeviceSetProperties(vals, result)) { out.lastError = L"设置失败：通信错误"; return false; }
+    int code = ParseFirstCode(result); out.lastCode = code;
+    if (code != 0) { out.lastError = L"设备返回错误码 " + std::to_wstring(code); return false; }
+    out.swing = s; return true;
+}
+
+bool CMijiaPowerPlugin::AcDetectModel(std::wstring& out) {
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    if (!m_device && !AcEnsureConnectedLocked()) { out = L""; return false; }
+    std::string m;
+    if (!m_device->GetDeviceInfo(m)) { out = L""; return false; }
+    out = S2WS(m);
+    auto& cfg = ConfigManager::Instance().Get();
+    cfg.acModel = out;
+    ConfigManager::Instance().Save();
+    return true;
+}
+
+void CMijiaPowerPlugin::OpenDashboard(HWND hParent) {
+    CDashboardDlg::Show(hParent, this);
+}
+
+// ─── 插件命令（右键菜单）───
+int CMijiaPowerPlugin::GetCommandCount() { return 2; }
+
+const wchar_t* CMijiaPowerPlugin::GetCommandName(int command_index) {
+    if (command_index == 0) return L"查看图表 / 电量";
+    if (command_index == 1) return L"空调控制面板";
+    return nullptr;
+}
+
+void CMijiaPowerPlugin::OnPluginCommand(int command_index, void* hWnd, void* para) {
+    (void)command_index; (void)para;
+    OpenDashboard((HWND)hWnd);
 }
 
 const wchar_t* CMijiaPowerPlugin::GetTooltipInfo() {

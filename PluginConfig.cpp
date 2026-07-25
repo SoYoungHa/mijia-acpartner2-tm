@@ -49,6 +49,19 @@ void ConfigManager::Load() {
     m_cfg.energyTodayWh = ReadIniDouble(L"Energy", L"TodayWh", 0.0, p);
     m_cfg.energyDate    = ReadIniString(L"Energy", L"Date",    L"",  p);
 
+    // 空调控制
+    m_cfg.enableAcControl = ReadIniBool (L"AC", L"EnableControl", false, p);
+    m_cfg.acModel         = ReadIniString(L"AC", L"Model", L"", p);
+
+    m_cfg.acModeSiid  = ReadIniInt(L"ACMap", L"ModeSiid",  2, p);
+    m_cfg.acModePiid  = ReadIniInt(L"ACMap", L"ModePiid",  2, p);
+    m_cfg.acTempSiid  = ReadIniInt(L"ACMap", L"TempSiid",  2, p);
+    m_cfg.acTempPiid  = ReadIniInt(L"ACMap", L"TempPiid",  3, p);
+    m_cfg.acFanSiid   = ReadIniInt(L"ACMap", L"FanSiid",   2, p);
+    m_cfg.acFanPiid   = ReadIniInt(L"ACMap", L"FanPiid",   4, p);
+    m_cfg.acSwingSiid = ReadIniInt(L"ACMap", L"SwingSiid", 2, p);
+    m_cfg.acSwingPiid = ReadIniInt(L"ACMap", L"SwingPiid", 5, p);
+
     // 约束
     if (m_cfg.updateIntervalSec < 1)  m_cfg.updateIntervalSec = 1;
     if (m_cfg.updateIntervalSec > 60) m_cfg.updateIntervalSec = 60;
@@ -75,4 +88,19 @@ void ConfigManager::Save() const {
     swprintf_s(buf, L"%.4f", m_cfg.energyTodayWh);
     WritePrivateProfileStringW(L"Energy", L"TodayWh", buf, p.c_str());
     WritePrivateProfileStringW(L"Energy", L"Date",    m_cfg.energyDate.c_str(), p.c_str());
+
+    // 空调控制
+    WritePrivateProfileStringW(L"AC", L"EnableControl",
+        m_cfg.enableAcControl ? L"1" : L"0", p.c_str());
+    WritePrivateProfileStringW(L"AC", L"Model", m_cfg.acModel.c_str(), p.c_str());
+
+    auto wint = [](int v) { wchar_t b[32]; _itow_s(v, b, 32); return std::wstring(b); };
+    WritePrivateProfileStringW(L"ACMap", L"ModeSiid",  wint(m_cfg.acModeSiid).c_str(),  p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"ModePiid",  wint(m_cfg.acModePiid).c_str(),  p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"TempSiid",  wint(m_cfg.acTempSiid).c_str(),  p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"TempPiid",  wint(m_cfg.acTempPiid).c_str(),  p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"FanSiid",   wint(m_cfg.acFanSiid).c_str(),   p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"FanPiid",   wint(m_cfg.acFanPiid).c_str(),   p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"SwingSiid", wint(m_cfg.acSwingSiid).c_str(), p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"SwingPiid", wint(m_cfg.acSwingPiid).c_str(), p.c_str());
 }
