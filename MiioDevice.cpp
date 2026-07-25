@@ -346,6 +346,24 @@ bool Decrypt(const unsigned char key[16], const unsigned char iv[16],
 // MiioDevice 实现
 // ════════════════════════════════════════
 
+std::wstring MiioDevice::s_debugLogPath;
+
+void MiioDevice::DebugLog(const std::string& s) {
+    if (s_debugLogPath.empty()) return;
+    HANDLE h = CreateFileW(s_debugLogPath.c_str(), FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    SYSTEMTIME st; GetLocalTime(&st);
+    std::ostringstream ts;
+    ts << "[" << st.wHour << ":" << st.wMinute << ":" << st.wSecond
+       << "." << st.wMilliseconds << "] " << s << "\r\n";
+    std::string line = ts.str();
+    DWORD written = 0;
+    WriteFile(h, line.c_str(), (DWORD)line.size(), &written, nullptr);
+    CloseHandle(h);
+}
+
 // HEX 字符串转字节
 static bool HexToBytes(const std::string& hex, unsigned char* out, size_t outLen) {
     if (hex.size() != outLen * 2) return false;
@@ -535,4 +553,220 @@ bool MiioDevice::GetPower(double& outWatts) {
     try { outWatts = std::stod(result.substr(i)); }
     catch (...) { outWatts = 0.0; return true; }
     return true;
+}
+
+// ════════════════════════════════════════
+// 空调伴侣控制方法
+// ════════════════════════════════════════
+
+bool MiioDevice::SetPower(bool on) {
+    // 旧协议：set_power ["on"] / ["off"]，对空调伴侣最可靠（红外转发）
+    std::string params = std::string("[\"") + (on ? "on" : "off") + "\"]";
+    std::string result;
+    return Send("set_power", params, result);
+}
+
+bool MiioDevice::GetPowerState(std::string& outState) {
+    std::string result;
+    if (!Send("get_prop", "[\"power\"]", result)) return false;
+    // 形如 ["on"] 或 "on"
+    auto lb = result.find('"');
+    if (lb == std::string::npos) return false;
+    auto rb = result.find('"', lb + 1);
+    outState = (rb == std::string::npos) ? result.substr(lb + 1)
+                                         : result.substr(lb + 1, rb - lb - 1);
+    return true;
+}
+
+bool MiioDevice::GetDeviceInfo(std::string& outModel) {
+    std::string result;
+    if (!Send("get_device_info", "[]", result)) return false;
+    auto p = result.find("\"model\"");
+    if (p == std::string::npos) return false;
+    // 定位 "model" 之后的冒号，再找值字符串的首个引号
+    auto colon = result.find(':', p + 7);
+    if (colon == std::string::npos) return false;
+    size_t q = colon + 1;
+    while (q < result.size() && (result[q] == ' ' || result[q] == '\t')) q++;
+    if (q >= result.size() || result[q] != '"') return false;
+    auto end = result.find('"', q + 1);
+    if (end == std::string::npos) return false;
+    outModel = result.substr(q + 1, end - q - 1);
+    return true;
+}
+
+bool MiioDevice::GetModelAndState(std::string& outModel, std::string& outState, int& outPower) {
+    // lumi 空调伴侣旧协议：get_model_and_state [] -> ["acModelCode","state",power]
+    std::string result;
+    if (!Send("get_model_and_state", "[]", result)) return false;
+    DebugLog("get_model_and_state resp: " + result);
+    // 收集所有引号字符串（第1个=model码，第2个=state）
+    std::vector<std::string> strs;
+    for (size_t i = 0; i < result.size();) {
+        size_t q = result.find('"', i);
+        if (q == std::string::npos) break;
+        size_t q2 = result.find('"', q + 1);
+        if (q2 == std::string::npos) break;
+        strs.push_back(result.substr(q + 1, q2 - q - 1));
+        i = q2 + 1;
+    }
+    if (strs.size() < 2) return false;
+    outModel = strs[0];
+    outState = strs[1];
+    // power：取结果中最后一个数字串
+    outPower = -1;
+    size_t p = result.find_last_of("0123456789");
+    if (p != std::string::npos) {
+        size_t s = p;
+        while (s > 0 && result[s - 1] >= '0' && result[s - 1] <= '9') s--;
+        try { outPower = std::stoi(result.substr(s, p - s + 1)); }
+        catch (...) { outPower = -1; }
+    }
+    return true;
+}
+
+bool MiioDevice::SendCmd(const std::string& code) {
+    // send_cmd ["code"] -> 成功返回 ["ok"]
+    std::string params = "[\"" + code + "\"]";
+    DebugLog("send_cmd req: " + params);
+    std::string result;
+    if (!Send("send_cmd", params, result)) { DebugLog("send_cmd: 通信失败"); return false; }
+    DebugLog("send_cmd resp: " + result);
+    return result.find("ok") != std::string::npos;
+}
+
+// 解析 JSON 数组为元素字符串列表（支持字符串与数字/bool元素）
+static std::vector<std::string> SplitJsonArray(const std::string& s) {
+    std::vector<std::string> out;
+    size_t start = s.find('[');
+    if (start == std::string::npos) return out;
+    size_t i = start + 1;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == ' ' || s[i] == ',' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
+        if (i >= s.size() || s[i] == ']') break;
+        if (s[i] == '"') {
+            size_t e = s.find('"', i + 1);
+            if (e == std::string::npos) break;
+            out.push_back(s.substr(i + 1, e - i - 1));
+            i = e + 1;
+        } else {
+            size_t e = i;
+            while (e < s.size() && s[e] != ',' && s[e] != ']' && s[e] != ' ' && s[e] != '\t') e++;
+            out.push_back(s.substr(i, e - i));
+            i = e;
+        }
+    }
+    return out;
+}
+
+bool MiioDevice::GetAcStatus(std::vector<std::string>& outValues) {
+    // mcn02: get_prop ["power","mode","tar_temp","fan_level","ver_swing","load_power"]
+    std::string result;
+    if (!Send("get_prop", "[\"power\",\"mode\",\"tar_temp\",\"fan_level\",\"ver_swing\",\"load_power\"]", result)) return false;
+    DebugLog("get_prop(ac) resp: " + result);
+    outValues = SplitJsonArray(result);
+    return outValues.size() >= 5;
+}
+
+bool MiioDevice::SendAcSet(const std::string& method, const std::string& paramsJson) {
+    DebugLog(method + " req: " + paramsJson);
+    std::string result;
+    if (!Send(method, paramsJson, result)) { DebugLog(method + ": 通信失败"); return false; }
+    DebugLog(method + " resp: " + result);
+    return result.find("ok") != std::string::npos;
+}
+
+bool MiioDevice::GetProperties(const std::vector<MiioProperty>& props, std::string& outResult) {
+    if (props.empty()) return false;
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < props.size(); ++i) {
+        if (i) oss << ",";
+        oss << "{\"did\":\"MYDID\",\"siid\":" << props[i].siid
+            << ",\"piid\":" << props[i].piid << "}";
+    }
+    oss << "]";
+    std::string params = oss.str();
+    DebugLog("get_properties req: " + params);
+    std::string r;
+    if (!Send("get_properties", params, r)) { DebugLog("get_properties: Send/通信失败"); return false; }
+    outResult = r;
+    DebugLog("get_properties resp: " + r);
+    return true;
+}
+
+bool MiioDevice::SetProperties(const std::vector<MiioPropValue>& vals, std::string& outResult) {
+    if (vals.empty()) return false;
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < vals.size(); ++i) {
+        if (i) oss << ",";
+        oss << "{\"did\":\"MYDID\",\"siid\":" << vals[i].siid
+            << ",\"piid\":" << vals[i].piid
+            << ",\"value\":" << vals[i].valueJson << "}";
+    }
+    oss << "]";
+    std::string params = oss.str();
+    DebugLog("set_properties req: " + params);
+    std::string r;
+    if (!Send("set_properties", params, r)) { DebugLog("set_properties: Send/通信失败"); return false; }
+    outResult = r;
+    DebugLog("set_properties resp: " + r);
+    return true;
+}
+
+std::vector<MiioPropResult> MiioDevice::ParsePropResults(const std::string& result) {
+    std::vector<MiioPropResult> out;
+    // 定位 result 数组
+    size_t pos = result.find("\"result\"");
+    std::string arr = (pos == std::string::npos) ? result : result.substr(pos + 8);
+    size_t start = arr.find('[');
+    if (start == std::string::npos) return out;
+
+    size_t cur = start + 1;
+    while (cur < arr.size()) {
+        size_t objStart = arr.find('{', cur);
+        if (objStart == std::string::npos) break;
+        // 找到匹配的 }
+        int depth = 0;
+        size_t j = objStart;
+        for (; j < arr.size(); ++j) {
+            if (arr[j] == '{') depth++;
+            else if (arr[j] == '}') { depth--; if (depth == 0) break; }
+        }
+        std::string obj = arr.substr(objStart, j - objStart + 1);
+        MiioPropResult r;
+
+        auto grabInt = [&](const char* key, int& dst) {
+            std::string k = key;
+            auto p = obj.find(k);
+            if (p != std::string::npos) {
+                try { dst = std::stoi(obj.substr(p + k.size())); } catch (...) {}
+            }
+        };
+        grabInt("\"siid\":", r.siid);
+        grabInt("\"piid\":", r.piid);
+        grabInt("\"code\":", r.code);
+
+        auto pv = obj.find("\"value\"");
+        if (pv != std::string::npos) {
+            size_t v = pv + 7;
+            while (v < obj.size() && (obj[v] == ' ' || obj[v] == '\t')) v++;
+            std::string val;
+            int d = 0;
+            for (size_t k = v; k < obj.size(); ++k) {
+                char c = obj[k];
+                if (c == '{' || c == '[') d++;
+                else if (c == '}' || c == ']') { if (d == 0) break; d--; }
+                else if (c == ',' && d == 0) break;
+                else if (c == '}' && d == 0) break;
+                val += c;
+            }
+            r.value = val;
+        }
+        r.valid = true;
+        out.push_back(r);
+        cur = j + 1;
+    }
+    return out;
 }

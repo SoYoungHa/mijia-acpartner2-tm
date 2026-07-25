@@ -3,6 +3,7 @@ bin/
 obj/
 Release/
 Debug/
+dist/
 *.dll
 *.lib
 *.exe
@@ -25,3 +26,6 @@ Debug/
 # 操作系统
 .DS_Store
 Thumbs.db
+
+# WorkBuddy 本地数据
+.workbuddy/

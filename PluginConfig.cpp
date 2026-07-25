@@ -49,6 +49,29 @@ void ConfigManager::Load() {
     m_cfg.energyTodayWh = ReadIniDouble(L"Energy", L"TodayWh", 0.0, p);
     m_cfg.energyDate    = ReadIniString(L"Energy", L"Date",    L"",  p);
 
+    // 空调控制
+    m_cfg.enableAcControl = ReadIniBool (L"AC", L"EnableControl", false, p);
+    m_cfg.acModel         = ReadIniString(L"AC", L"Model", L"", p);
+
+    m_cfg.acModeSiid  = ReadIniInt(L"ACMap", L"ModeSiid",  2, p);
+    m_cfg.acModePiid  = ReadIniInt(L"ACMap", L"ModePiid",  2, p);
+    m_cfg.acTempSiid  = ReadIniInt(L"ACMap", L"TempSiid",  2, p);
+    m_cfg.acTempPiid  = ReadIniInt(L"ACMap", L"TempPiid",  3, p);
+    m_cfg.acFanSiid   = ReadIniInt(L"ACMap", L"FanSiid",   3, p);
+    m_cfg.acFanPiid   = ReadIniInt(L"ACMap", L"FanPiid",   1, p);
+    m_cfg.acSwingSiid = ReadIniInt(L"ACMap", L"SwingSiid", 3, p);
+    m_cfg.acSwingPiid = ReadIniInt(L"ACMap", L"SwingPiid", 2, p);
+
+    // 一次性迁移：旧版本误把 fan/swing 设为 siid=2（mcn02 上不存在），此处纠正
+    m_cfg.acMapVer = ReadIniInt(L"ACMap", L"MapVer", 0, p);
+    if (m_cfg.acMapVer < 2) {
+        bool corrected = false;
+        if (m_cfg.acFanSiid == 2 && m_cfg.acFanPiid == 4)    { m_cfg.acFanSiid = 3; m_cfg.acFanPiid = 1; corrected = true; }
+        if (m_cfg.acSwingSiid == 2 && m_cfg.acSwingPiid == 5){ m_cfg.acSwingSiid = 3; m_cfg.acSwingPiid = 2; corrected = true; }
+        m_cfg.acMapVer = 2;
+        if (corrected) ConfigManager::Instance().Save();   // 立即落盘，避免重复迁移
+    }
+
     // 约束
     if (m_cfg.updateIntervalSec < 1)  m_cfg.updateIntervalSec = 1;
     if (m_cfg.updateIntervalSec > 60) m_cfg.updateIntervalSec = 60;
@@ -75,4 +98,20 @@ void ConfigManager::Save() const {
     swprintf_s(buf, L"%.4f", m_cfg.energyTodayWh);
     WritePrivateProfileStringW(L"Energy", L"TodayWh", buf, p.c_str());
     WritePrivateProfileStringW(L"Energy", L"Date",    m_cfg.energyDate.c_str(), p.c_str());
+
+    // 空调控制
+    WritePrivateProfileStringW(L"AC", L"EnableControl",
+        m_cfg.enableAcControl ? L"1" : L"0", p.c_str());
+    WritePrivateProfileStringW(L"AC", L"Model", m_cfg.acModel.c_str(), p.c_str());
+
+    auto wint = [](int v) { wchar_t b[32]; _itow_s(v, b, 32); return std::wstring(b); };
+    WritePrivateProfileStringW(L"ACMap", L"ModeSiid",  wint(m_cfg.acModeSiid).c_str(),  p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"ModePiid",  wint(m_cfg.acModePiid).c_str(),  p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"TempSiid",  wint(m_cfg.acTempSiid).c_str(),  p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"TempPiid",  wint(m_cfg.acTempPiid).c_str(),  p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"FanSiid",   wint(m_cfg.acFanSiid).c_str(),   p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"FanPiid",   wint(m_cfg.acFanPiid).c_str(),   p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"SwingSiid", wint(m_cfg.acSwingSiid).c_str(), p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"SwingPiid", wint(m_cfg.acSwingPiid).c_str(), p.c_str());
+    WritePrivateProfileStringW(L"ACMap", L"MapVer",     wint(m_cfg.acMapVer).c_str(),    p.c_str());
 }

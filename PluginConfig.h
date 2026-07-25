@@ -20,6 +20,20 @@ struct PluginConfig {
     // 今日用电量（本地按功率积分估算）
     double       energyTodayWh = 0.0; // 今日累计 Wh
     std::wstring energyDate;          // 今日日期 YYYYMMDD，跨天清零用
+
+    // ── 空调控制（米家空调伴侣）──
+    bool        enableAcControl = false;   // 是否启用空调控制面板
+    std::wstring acModel;                  // 设备 model（探测后写入）
+
+    // MIoT SPEC 属性映射（siid/piid），默认按 lumi.acpartner.mcn02 官方 SPEC：
+    //   air-conditioner(#2): on=2/1, mode=2/2, target-temperature=2/3(float)
+    //   fan-control(#3):     fan-level=3/1, vertical-swing=3/2(bool)
+    // 不同固件可能不同，可在选项或 INI [ACMap] 中调整
+    int acModeSiid  = 2, acModePiid  = 2;  // 模式
+    int acTempSiid  = 2, acTempPiid  = 3;  // 目标温度（float）
+    int acFanSiid   = 3, acFanPiid   = 1;  // 风机档位
+    int acSwingSiid = 3, acSwingPiid = 2;  // 上下摆风（bool）
+    int acMapVer    = 0;                   // ACMap 版本（用于一次性迁移修正旧默认值）
 };
 
 class ConfigManager {
@@ -30,6 +44,7 @@ public:
     }
 
     void  SetConfigDir(const std::wstring& dir) { m_dir = dir; }
+    const std::wstring& GetConfigDir() const { return m_dir; }
     void  Load();
     void  Save() const;
 
