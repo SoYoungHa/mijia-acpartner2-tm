@@ -36,7 +36,8 @@ private:
     static void DrawCharts(HWND hWnd, Ctx* ctx);     // 重绘两张图
     static void DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
                           double yMax, const wchar_t* title,
-                          const wchar_t* unit, double curVal, COLORREF line);
+                          const wchar_t* unit, double curVal, COLORREF line,
+                          double t0, double t1, int winSec);
     static void BuildSeries(Ctx* ctx, std::vector<double>& powerYs,
                             std::vector<double>& energyYs,
                             double& t0, double& t1, double& todayKwh);
