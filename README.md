@@ -3,7 +3,8 @@
 ## 简介
 
 这是一个 TrafficMonitor 插件，可以在 Windows 任务栏实时显示米家空调伴侣 / 米家/酷控（cuco）智能插座的功率与用电量，并支持**功率图 / 电量图**查看与**电脑端空调控制**（开关、温度、模式、风速、摆风）。
-<img width="533" height="598" alt="插件截图" src="https://github.com/user-attachments/assets/90fd0cb1-d807-4bc9-a64a-b7a10b8ae9c9" />
+
+![插件截图](空调伴侣.png)
 
 
 
