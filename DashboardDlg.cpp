@@ -4,6 +4,7 @@
 #include "MijiaPowerPlugin.h"
 #include "MiioDevice.h"
 #include <commctrl.h>
+#include <ole2.h>          // GDI+ 依赖 COM 类型(interface/PROPID 等)，WIN32_LEAN_AND_MEAN 会排除，需显式引入
 #include <gdiplus.h>
 #include <string>
 #include <vector>
@@ -384,12 +385,11 @@ void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
     // 折线（抗锯齿）
     Pen linePen(C(line), 2.2f);
     linePen.SetLineJoin(LineJoinRound);
-    if (n == 1) g.FillEllipse(&SolidBrush(C(line)), pts[0].X-3, pts[0].Y-3, 6, 6);
-    else g.DrawLines(&linePen, pts.data(), (INT)n);
+    if (n >= 2) g.DrawLines(&linePen, pts.data(), (INT)n);
 
-    // 末端高亮点
+    // 末端高亮点（单点也画）
     SolidBrush dot(C(line));
-    g.FillEllipse(&dot, pts[n-1].X - 3.5f, pts[n-1].Y - 3.5f, 7, 7);
+    g.FillEllipse(&dot, pts[n-1].X - 3.5f, pts[n-1].Y - 3.5f, 7.0f, 7.0f);
 }
 
 // ─── 绘制两张图 + 头部 ───
