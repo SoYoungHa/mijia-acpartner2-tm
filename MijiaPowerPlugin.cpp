@@ -343,11 +343,11 @@ void CMijiaPowerPlugin::DataRequired() {
 const wchar_t* CMijiaPowerPlugin::GetInfo(PluginInfoIndex index) {
     switch (index) {
     case TMI_NAME:        return L"米家空调伴侣";
-    case TMI_DESCRIPTION: return L"实时功率/用电，支持功率图与电量图，并可电脑控制空调（开关/温度/模式/风速/摆风）";
+    case TMI_DESCRIPTION: return L"实时功率/用电，支持功率图与电量图，并可电脑控制空调（开关/温度/模式/风速/摆风，lumi空调伴侣旧协议）";
     case TMI_AUTHOR:      return L"MijiaPlug";
     case TMI_COPYRIGHT:   return L"2024 MijiaPlug";
     case TMI_URL:         return L"";
-    case TMI_VERSION:     return L"1.1.1";
+    case TMI_VERSION:     return L"1.2.0";
     default:              return L"";
     }
 }
@@ -390,6 +390,40 @@ namespace {
         if (s == "false") { out = 0; return true; }
         try { out = (int)std::stod(s); return true; }
         catch (...) { return false; }
+    }
+
+    // ── lumi 空调伴侣旧协议辅助 ──
+    // 解析状态串: state = [2前缀][power][mode][fan][1-swing][temp(16进制2位)][led]...
+    void ParseAcState(const std::string& state, AcState& out) {
+        out.power = (state.size() > 2 && state[2] == '1') ? 1 : (state.size() > 2 ? 0 : -1);
+        out.mode  = (state.size() > 3) ? (state[3] - '0') : -1;
+        out.fan   = (state.size() > 4) ? (state[4] - '0') : -1;
+        out.swing = (state.size() > 5) ? (1 - (state[5] - '0')) : -1;  // 位5=1-swing
+        if (state.size() > 7) {
+            // 手动解析 2 位十六进制温度（避免依赖 strtol）
+            int v = 0;
+            for (int k = 0; k < 2; k++) {
+                char c = state[6 + k];
+                int d = (c >= '0' && c <= '9') ? c - '0'
+                      : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                      : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : 0;
+                v = v * 16 + d;
+            }
+            out.temp = v;
+        } else out.temp = -1;
+    }
+    // 构造 send_cmd 控制码 = model.substr(0,2)+model.substr(8,8) + state.substr(2)
+    std::string BuildAcCode(const std::string& model, const std::string& state) {
+        std::string prefix;
+        if (model.size() >= 2) prefix = model.substr(0, 2);
+        if (model.size() > 8) prefix += model.substr(8, 8);
+        std::string tail = (state.size() > 2) ? state.substr(2) : std::string();
+        return prefix + tail;
+    }
+    // 温度转 2 位小写十六进制（16~30 → "10".."1e"）
+    std::string HexByte(int v) {
+        static const char* d = "0123456789abcdef";
+        std::string s; s += d[(v >> 4) & 0xF]; s += d[v & 0xF]; return s;
     }
 }
 
@@ -461,91 +495,81 @@ bool CMijiaPowerPlugin::AcRefreshState(AcState& out) {
     out.lastError.clear(); out.lastCode = 0;
     auto& cfg = ConfigManager::Instance().Get();
     if (!cfg.enableAcControl) { out.lastError = L"空调控制未启用"; return false; }
-    if (!AcEnsureConnected()) { out.lastError = L"读取失败：设备未连接"; return false; }
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    if (!m_device && !AcEnsureConnectedLocked()) { out.lastError = L"读取失败：设备未连接"; return false; }
+    std::string model, state; int power = -1;
+    if (!m_device->GetModelAndState(model, state, power)) {
+        out.lastError = L"读取失败：通信错误（设备可能不支持旧协议）"; return false;
+    }
+    ParseAcState(state, out);
+    if (power >= 0) out.power = power;
+    return true;
+}
 
-    std::vector<MiioProperty> props = {
-        { cfg.acModeSiid,  cfg.acModePiid },
-        { cfg.acTempSiid,  cfg.acTempPiid },
-        { cfg.acFanSiid,   cfg.acFanPiid },
-        { cfg.acSwingSiid, cfg.acSwingPiid },
-    };
-    std::string result;
-    if (!DeviceGetProperties(props, result)) {
-        out.lastError = L"读取失败：通信错误"; return false;
-    }
-    auto parsed = MiioDevice::ParsePropResults(result);
-    if (parsed.empty()) {
-        out.lastCode = -1;
-        out.lastError = L"设备未返回属性（siid/piid 可能不正确，或该设备不支持状态读取）";
-        return false;
-    }
-    for (auto& r : parsed) {
-        if (r.code != 0) { out.lastCode = r.code; out.lastError = L"设备返回错误码 " + std::to_wstring(r.code); }
-        if (r.siid == cfg.acModeSiid && r.piid == cfg.acModePiid)        ToIntVal(r.value, out.mode);
-        else if (r.siid == cfg.acTempSiid && r.piid == cfg.acTempPiid)   ToIntVal(r.value, out.temp);
-        else if (r.siid == cfg.acFanSiid  && r.piid == cfg.acFanPiid)    ToIntVal(r.value, out.fan);
-        else if (r.siid == cfg.acSwingSiid && r.piid == cfg.acSwingPiid) ToIntVal(r.value, out.swing);
-    }
+// 通用：读取当前状态 → 修改单字段 → send_cmd 下发
+static bool AcModifyAndSend(MiioDevice* dev, std::function<void(std::string&)> modify, AcState& out) {
+    std::string model, state; int power = -1;
+    if (!dev->GetModelAndState(model, state, power)) { out.lastError = L"设置失败：读取状态通信错误"; return false; }
+    ParseAcState(state, out);
+    if (power >= 0) out.power = power;
+    if (state.size() < 8) { out.lastError = L"状态串格式异常，无法控制"; return false; }
+    modify(state);
+    if (!dev->SendCmd(BuildAcCode(model, state))) { out.lastError = L"设置失败：设备未响应 ok"; out.lastCode = -1; return false; }
     return true;
 }
 
 bool CMijiaPowerPlugin::AcSetTemp(int t, AcState& out) {
     out.lastError.clear(); out.lastCode = 0;
     auto& cfg = ConfigManager::Instance().Get();
-    if (!AcEnsureConnected()) { out.lastError = L"设置失败：设备未连接"; return false; }
-    std::vector<MiioPropValue> vals = { { cfg.acTempSiid, cfg.acTempPiid, std::to_string(t) } };
-    std::string result;
-    if (!DeviceSetProperties(vals, result)) { out.lastError = L"设置失败：通信错误"; return false; }
-    int code = ParseFirstCode(result); out.lastCode = code;
-    if (code != 0) { out.lastError = L"设备返回错误码 " + std::to_wstring(code); return false; }
+    if (!cfg.enableAcControl) { out.lastError = L"空调控制未启用"; return false; }
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    if (!m_device && !AcEnsureConnectedLocked()) { out.lastError = L"设置失败：设备未连接"; return false; }
+    std::string hex = HexByte(t);
+    if (!AcModifyAndSend(m_device.get(), [hex](std::string& s){ s[6] = hex[0]; s[7] = hex[1]; }, out)) return false;
     out.temp = t; return true;
 }
 
 bool CMijiaPowerPlugin::AcSetMode(int m, AcState& out) {
     out.lastError.clear(); out.lastCode = 0;
     auto& cfg = ConfigManager::Instance().Get();
-    if (!AcEnsureConnected()) { out.lastError = L"设置失败：设备未连接"; return false; }
-    std::vector<MiioPropValue> vals = { { cfg.acModeSiid, cfg.acModePiid, std::to_string(m) } };
-    std::string result;
-    if (!DeviceSetProperties(vals, result)) { out.lastError = L"设置失败：通信错误"; return false; }
-    int code = ParseFirstCode(result); out.lastCode = code;
-    if (code != 0) { out.lastError = L"设备返回错误码 " + std::to_wstring(code); return false; }
+    if (!cfg.enableAcControl) { out.lastError = L"空调控制未启用"; return false; }
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    if (!m_device && !AcEnsureConnectedLocked()) { out.lastError = L"设置失败：设备未连接"; return false; }
+    char mc = (char)('0' + (m % 10));
+    if (!AcModifyAndSend(m_device.get(), [mc](std::string& s){ s[3] = mc; }, out)) return false;
     out.mode = m; return true;
 }
 
 bool CMijiaPowerPlugin::AcSetFan(int f, AcState& out) {
     out.lastError.clear(); out.lastCode = 0;
     auto& cfg = ConfigManager::Instance().Get();
-    if (!AcEnsureConnected()) { out.lastError = L"设置失败：设备未连接"; return false; }
-    std::vector<MiioPropValue> vals = { { cfg.acFanSiid, cfg.acFanPiid, std::to_string(f) } };
-    std::string result;
-    if (!DeviceSetProperties(vals, result)) { out.lastError = L"设置失败：通信错误"; return false; }
-    int code = ParseFirstCode(result); out.lastCode = code;
-    if (code != 0) { out.lastError = L"设备返回错误码 " + std::to_wstring(code); return false; }
+    if (!cfg.enableAcControl) { out.lastError = L"空调控制未启用"; return false; }
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    if (!m_device && !AcEnsureConnectedLocked()) { out.lastError = L"设置失败：设备未连接"; return false; }
+    char fc = (char)('0' + (f % 10));
+    if (!AcModifyAndSend(m_device.get(), [fc](std::string& s){ s[4] = fc; }, out)) return false;
     out.fan = f; return true;
 }
 
 bool CMijiaPowerPlugin::AcSetSwing(int s, AcState& out) {
     out.lastError.clear(); out.lastCode = 0;
     auto& cfg = ConfigManager::Instance().Get();
-    if (!AcEnsureConnected()) { out.lastError = L"设置失败：设备未连接"; return false; }
-    // 摆风为 bool 属性，value 需用 true/false
-    std::vector<MiioPropValue> vals = { { cfg.acSwingSiid, cfg.acSwingPiid, (s ? "true" : "false") } };
-    std::string result;
-    if (!DeviceSetProperties(vals, result)) { out.lastError = L"设置失败：通信错误"; return false; }
-    int code = ParseFirstCode(result); out.lastCode = code;
-    if (code != 0) { out.lastError = L"设备返回错误码 " + std::to_wstring(code); return false; }
+    if (!cfg.enableAcControl) { out.lastError = L"空调控制未启用"; return false; }
+    std::lock_guard<std::mutex> lock(m_deviceMutex);
+    if (!m_device && !AcEnsureConnectedLocked()) { out.lastError = L"设置失败：设备未连接"; return false; }
+    char sc = (char)('0' + (1 - s));   // 位5 = 1-swing
+    if (!AcModifyAndSend(m_device.get(), [sc](std::string& s){ s[5] = sc; }, out)) return false;
     out.swing = s; return true;
 }
 
 bool CMijiaPowerPlugin::AcDetectModel(std::wstring& out) {
     std::lock_guard<std::mutex> lock(m_deviceMutex);
     if (!m_device && !AcEnsureConnectedLocked()) { out = L""; return false; }
-    std::string m;
-    if (!m_device->GetDeviceInfo(m)) { out = L""; return false; }
-    out = S2WS(m);
+    std::string model, state; int power = -1;
+    if (!m_device->GetModelAndState(model, state, power)) { out = L""; return false; }
+    out = L"AC型号码:" + S2WS(model) + L"  状态:" + S2WS(state);
     auto& cfg = ConfigManager::Instance().Get();
-    cfg.acModel = out;
+    cfg.acModel = S2WS(model);
     ConfigManager::Instance().Save();
     return true;
 }

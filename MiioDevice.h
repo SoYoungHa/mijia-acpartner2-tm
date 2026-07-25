@@ -82,6 +82,11 @@ public:
     bool GetPowerState(std::string& outState);   // get_prop ["power"] -> "on"/"off"
     bool GetDeviceInfo(std::string& outModel);   // get_device_info -> model 字段
 
+    // lumi 空调伴侣旧协议：读取 AC 型号码+状态串；send_cmd 下发控制码
+    // state 位编码: [2前缀][power][mode][fan][1-swing][temp(16进制2位)][led]...
+    bool GetModelAndState(std::string& outModel, std::string& outState, int& outPower);
+    bool SendCmd(const std::string& code);       // send_cmd ["code"] -> 成功返回 ["ok"]
+
     // MIoT SPEC：批量读/写属性
     bool GetProperties(const std::vector<MiioProperty>& props, std::string& outResult);
     bool SetProperties(const std::vector<MiioPropValue>& vals,  std::string& outResult);
