@@ -418,10 +418,13 @@ void CDashboardDlg::DrawCharts(HWND hWnd, Ctx* ctx) {
     double t0, t1, todayKwh;
     BuildSeries(ctx, powerYs, energyYs, t0, t1, todayKwh);
 
-    RECT prc = { S(20), S(96),  S(820), S(280) };
-    RECT erc = { S(20), S(290), S(820), S(474) };
+    // 右边界跟随窗口宽度（支持拉宽），左边界固定 S(20)
+    RECT crc; GetClientRect(hWnd, &crc);
+    int right = crc.right - S(20);
+    RECT prc = { S(20), S(96),  right, S(280) };
+    RECT erc = { S(20), S(290), right, S(474) };
     // AC 卡片边框
-    RECT arc = { S(20), S(484), S(820), S(684) };
+    RECT arc = { S(20), S(484), right, S(684) };
 
     double pMax = 0.0;
     for (double v : powerYs) if (v > pMax) pMax = v;
@@ -487,11 +490,10 @@ static void DrawButton(LPDRAWITEMSTRUCT dis) {
 
 // ─── 定时器 ───
 void CDashboardDlg::OnTimer(HWND hWnd, Ctx* ctx) {
-    // 仅重绘图表区（头部 + 两张图 + AC 卡片）
-    UINT dpi = GetWindowDpi(hWnd);
-    auto S = [dpi](int v) { return MulDiv(v, dpi, 96); };
-    RECT all = { S(20), S(12), S(820), S(684) };
-    InvalidateRect(hWnd, &all, FALSE);
+    // 重绘图表区（跟随窗口宽度）
+    (void)ctx;
+    RECT crc; GetClientRect(hWnd, &crc);
+    InvalidateRect(hWnd, &crc, FALSE);
 }
 
 // ─── 窗口过程 ───
@@ -604,6 +606,9 @@ LRESULT CALLBACK CDashboardDlg::DlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
     }
     case WM_TIMER:
         if (ctx) OnTimer(hWnd, ctx);
+        break;
+    case WM_SIZE:
+        InvalidateRect(hWnd, NULL, FALSE);   // 窗口大小变化时重绘，图表跟随宽度
         break;
     case WM_PAINT:
         if (ctx) DrawCharts(hWnd, ctx);
