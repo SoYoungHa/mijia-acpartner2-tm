@@ -144,7 +144,6 @@ static void RecenterControls(HWND hWnd) {
     RECT crc; GetClientRect(hWnd, &crc);
     int natW = S(NATURAL_W);
     int ox = (crc.right > natW) ? (crc.right - natW) / 2 : 0;
-    if (ox == g_ox) return;        // 无变化就不动
     g_ox = ox;
     for (const auto& c : g_cl) {
         HWND hw = GetDlgItem(hWnd, c.id);
@@ -472,11 +471,13 @@ void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
     SolidBrush dot(C(line));
     g.FillEllipse(&dot, pts[n-1].X - 3.5f, pts[n-1].Y - 3.5f, 7.0f, 7.0f);
 
-    // X 轴时间/日期标签（用主题文字色更醒目，位置上移避免被切）
+    // X 轴时间/日期标签（GDI TextOutW，4K 可靠；GDI+ DrawString 在 4K 会渲染失败）
+    g.Flush();   // 确保 GDI+ 绘制已刷到 HDC
     if (t1 > t0 && plotW > 60) {
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, g_theme.text);
+        HFONT oldF = (HFONT)SelectObject(hdc, g_hFont);
         int xTicks = 5;
-        SolidBrush axisBrush(C(g_theme.text));   // 用正文色，醒目
-        StringFormat xf; xf.SetAlignment(StringAlignmentCenter);
         for (int i = 0; i <= xTicks; ++i) {
             double frac = (double)i / xTicks;
             time_t tt = (time_t)(t0 + (t1 - t0) * frac);
@@ -484,10 +485,11 @@ void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
             wchar_t lb[32];
             if (winSec <= 86400) swprintf_s(lb, L"%02d:%02d", tmv.tm_hour, tmv.tm_min);
             else                 swprintf_s(lb, L"%d/%d", tmv.tm_mon + 1, tmv.tm_mday);
-            REAL xx = (REAL)(px + plotW * frac);
-            RectF box(xx - 36, (REAL)(py2 + 3), 72, 18);
-            g.DrawString(lb, -1, &font, box, &xf, &axisBrush);
+            int xx = px + (int)(plotW * frac);
+            SIZE sz; GetTextExtentPoint32W(hdc, lb, (int)wcslen(lb), &sz);
+            TextOutW(hdc, xx - sz.cx / 2, py2 + 4, lb, (int)wcslen(lb));
         }
+        SelectObject(hdc, oldF);
     }
 }
 
