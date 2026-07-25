@@ -2,7 +2,7 @@ name: build-dll
 
 on:
   push:
-    branches: [ main, master, 'feature/**' ]
+    branches: [ main, master, 'feature/**', 'fix-*' ]
   workflow_dispatch:
 
 jobs:
