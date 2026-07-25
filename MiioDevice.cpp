@@ -635,6 +635,47 @@ bool MiioDevice::SendCmd(const std::string& code) {
     return result.find("ok") != std::string::npos;
 }
 
+// 解析 JSON 数组为元素字符串列表（支持字符串与数字/bool元素）
+static std::vector<std::string> SplitJsonArray(const std::string& s) {
+    std::vector<std::string> out;
+    size_t start = s.find('[');
+    if (start == std::string::npos) return out;
+    size_t i = start + 1;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == ' ' || s[i] == ',' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
+        if (i >= s.size() || s[i] == ']') break;
+        if (s[i] == '"') {
+            size_t e = s.find('"', i + 1);
+            if (e == std::string::npos) break;
+            out.push_back(s.substr(i + 1, e - i - 1));
+            i = e + 1;
+        } else {
+            size_t e = i;
+            while (e < s.size() && s[e] != ',' && s[e] != ']' && s[e] != ' ' && s[e] != '\t') e++;
+            out.push_back(s.substr(i, e - i));
+            i = e;
+        }
+    }
+    return out;
+}
+
+bool MiioDevice::GetAcStatus(std::vector<std::string>& outValues) {
+    // mcn02: get_prop ["power","mode","tar_temp","fan_level","ver_swing","load_power"]
+    std::string result;
+    if (!Send("get_prop", "[\"power\",\"mode\",\"tar_temp\",\"fan_level\",\"ver_swing\",\"load_power\"]", result)) return false;
+    DebugLog("get_prop(ac) resp: " + result);
+    outValues = SplitJsonArray(result);
+    return outValues.size() >= 5;
+}
+
+bool MiioDevice::SendAcSet(const std::string& method, const std::string& paramsJson) {
+    DebugLog(method + " req: " + paramsJson);
+    std::string result;
+    if (!Send(method, paramsJson, result)) { DebugLog(method + ": 通信失败"); return false; }
+    DebugLog(method + " resp: " + result);
+    return result.find("ok") != std::string::npos;
+}
+
 bool MiioDevice::GetProperties(const std::vector<MiioProperty>& props, std::string& outResult) {
     if (props.empty()) return false;
     std::ostringstream oss;
