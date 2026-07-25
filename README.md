@@ -1,18 +1,66 @@
-# 米家插座功率 TrafficMonitor 插件
+# 米家空调伴侣 TrafficMonitor 插件
 
 ## 简介
 
-这是一个 TrafficMonitor 插件，可以在 Windows 任务栏实时显示米家/酷控（cuco）智能插座的功率数值，并可选开启功率历史记录功能。
+这是一个 TrafficMonitor 插件，可以在 Windows 任务栏实时显示米家空调伴侣 / 米家/酷控（cuco）智能插座的功率与用电量，并支持**功率图 / 电量图**查看与**电脑端空调控制**（开关、温度、模式、风速、摆风）。
 <img width="533" height="598" alt="插件截图" src="https://github.com/user-attachments/assets/90fd0cb1-d807-4bc9-a64a-b7a10b8ae9c9" />
 
 
 
 **主要功能：**
-- 📊 实时在任务栏显示功率（W）
+- 📊 实时在任务栏显示功率（W），并在任务栏内联绘制功率迷你曲线
 - 💾 可选启用功率历史记录（按分钟采样，最多保存7天）
-- 📈 鼠标悬停提示：显示10分钟/1小时/24小时最大/最小/平均功率
-- ⚙️ 设置对话框：配置设备IP、Token，调整显示格式
+- 📈 **功率图 / 电量图**：双击功率项或通过右键菜单打开面板，查看 10分钟/1小时/24小时/7天 的功率折线图与累计电量图
+- 🌡️ **电脑控制空调**：在面板上开关空调、调节温度、切换模式（制冷/制热/除湿/送风/自动）、风速、摆风
+- 📋 鼠标悬停提示：显示10分钟/1小时/24小时最大/最小/平均功率
+- ⚙️ 设置对话框：配置设备IP、Token，调整显示格式，配置空调控制的 siid/piid 映射
 - 🔗 支持断线自动重连
+
+---
+
+## 🆕 图表与空调控制（v1.1）
+
+### 打开方式
+- **双击**任务栏上的功率数值 → 打开「图表与控制」面板
+- 右键 TrafficMonitor → 插件命令 → **查看图表 / 电量** 或 **空调控制面板**
+- 插件「选项」对话框中点击 **打开控制面板**
+
+### 功率图 / 电量图
+面板上方为两张图：**功率图（W）** 与 **电量图（度，按功率梯形积分）**。可用顶部按钮切换时间范围：10分钟 / 1小时 / 24小时 / 7天。图表每 2 秒自动刷新。
+> 电量图为本地按功率积分估算值，非设备电表读数；如需精确电量以米家 App 为准。
+
+### 空调控制
+面板下方为控制区。**首次使用前请在「选项」中勾选「启用空调控制」**，并确认 siid/piid 映射正确。
+- **开关机**：走 miIO 旧协议 `set_power`（对空调伴侣最可靠，红外转发）。
+- **温度 / 模式 / 风速 / 摆风**：走 MIoT SPEC `set_properties`，默认映射按 `lumi.acpartner.mcn02`。
+
+> ⚠️ 不同固件/型号的 siid/piid 可能不同。若调节温度/模式无效（面板会显示设备返回的错误码），请用下面的方法核对并修改。
+
+#### 如何核对 siid/piid（推荐）
+安装 python-miio 后执行（替换 IP / Token）：
+```bash
+pip install python-miio
+miiocli genericmiot --ip 192.168.1.100 --token <你的Token> status
+```
+输出会列出每个属性的 `siid`/`piid`，例如：
+```
+Target Temperature (air-conditioner:target-temperature, access: RW) ... (siid=2, piid=3)
+```
+将 `模式/温度/风速/摆风` 对应的 siid/piid 填入插件「选项」的「空调控制」分组，或在 `MijiaPower.ini` 的 `[ACMap]` 段修改：
+```ini
+[AC]
+EnableControl=1
+[ACMap]
+ModeSiid=2
+ModePiid=2
+TempSiid=2
+TempPiid=3
+FanSiid=2
+FanPiid=4
+SwingSiid=2
+SwingPiid=5
+```
+面板上的 **测试指令** 按钮会读取一次状态并返回码：`0` 表示映射正确。
 
 ---
 
@@ -260,6 +308,7 @@ python -m miio.extract_tokens
 | `PluginConfig.h/.cpp` | 插件配置（INI文件读写） |
 | `MijiaPowerPlugin.h/.cpp` | 插件主类（ITMPlugin/IPluginItem实现） |
 | `OptionsDlg.h/.cpp` | 设置对话框（纯Win32） |
+| `DashboardDlg.h/.cpp` | 图表 + 空调控制面板（纯Win32 + GDI） |
 | `pch.h/.cpp` | 预编译头 |
 
 ---

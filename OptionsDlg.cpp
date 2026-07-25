@@ -3,6 +3,8 @@
 #include "OptionsDlg.h"
 #include "PluginConfig.h"
 #include "MiioDevice.h"
+#include "MijiaPowerPlugin.h"
+#include "DashboardDlg.h"
 #include <commctrl.h>
 #include <string>
 #include <sstream>
@@ -24,6 +26,19 @@
 #define IDC_BTN_CANCEL        1014
 #define IDC_SCROLL_CONTAINER  1015
 
+// 空调控制相关
+#define IDC_CHECK_AC          1020
+#define IDC_STATIC_ACMODEL    1021
+#define IDC_BTN_DASHBOARD     1022
+#define IDC_EDIT_MODE_S       1023
+#define IDC_EDIT_MODE_P       1024
+#define IDC_EDIT_TEMP_S       1025
+#define IDC_EDIT_TEMP_P       1026
+#define IDC_EDIT_FAN_S        1027
+#define IDC_EDIT_FAN_P        1028
+#define IDC_EDIT_SWING_S      1029
+#define IDC_EDIT_SWING_P      1030
+
 // ─── 辅助：添加控件 ───
 static HWND AddCtrl(HWND parent, LPCWSTR cls, LPCWSTR text, DWORD style,
                     int x, int y, int w, int h, int id) {
@@ -36,6 +51,7 @@ static HWND AddCtrl(HWND parent, LPCWSTR cls, LPCWSTR text, DWORD style,
 struct DlgState {
     bool result = false;
     bool closed = false;
+    HWND hDlg = nullptr;
     HWND hEditIp = nullptr, hEditToken = nullptr, hEditName = nullptr, hEditInterval = nullptr;
     HWND hCheckRecord = nullptr, hCheckLabel = nullptr, hCheckUnit = nullptr;
     HWND hComboDecimal = nullptr, hStaticStatus = nullptr;
@@ -114,14 +130,52 @@ static void CreateControls(HWND hWnd, DlgState* st) {
     SendMessageW(st->hComboDecimal, CB_ADDSTRING, 0, (LPARAM)L"2位");
 
     // ─── 历史数据分组 ───
-    addCtrl(L"BUTTON", L"历史数据", BS_GROUPBOX, 15, 345, 470, 85, 0);
+    addCtrl(L"BUTTON", L"历史数据", BS_GROUPBOX, 15, 345, 470, 80, 0);
     addCtrl(L"STATIC", L"功率历史保存在配置目录 MijiaPower_history.json 中",
-            SS_LEFT | SS_WORDELLIPSIS, 30, 368, 310, 40, IDC_STATIC_HISTORY);
-    st->hBtnClearHistory = addCtrl(L"BUTTON", L"清除历史", BS_PUSHBUTTON, 350, 371, 120, 32, IDC_BTN_CLEARHISTORY);
+            SS_LEFT | SS_WORDELLIPSIS, 30, 366, 310, 40, IDC_STATIC_HISTORY);
+    st->hBtnClearHistory = addCtrl(L"BUTTON", L"清除历史", BS_PUSHBUTTON, 350, 369, 120, 32, IDC_BTN_CLEARHISTORY);
+
+    // ─── 空调控制分组 ───
+    addCtrl(L"BUTTON", L"空调控制（米家空调伴侣）", BS_GROUPBOX, 15, 433, 470, 158, 0);
+    addCtrl(L"BUTTON", L"启用空调控制", BS_AUTOCHECKBOX, 30, 452, 160, 26, IDC_CHECK_AC);
+    addCtrl(L"STATIC", L"型号：未知", SS_LEFT, 200, 456, 250, 22, IDC_STATIC_ACMODEL);
+    addCtrl(L"BUTTON", L"打开控制面板", BS_PUSHBUTTON, 360, 452, 120, 28, IDC_BTN_DASHBOARD);
+
+    // 模式 / 风速 行
+    addCtrl(L"STATIC", L"模式", 0, 30,  492, 40, 20, 0);
+    addCtrl(L"EDIT", L"", WS_BORDER | ES_NUMBER, 74,  490, 42, 24, IDC_EDIT_MODE_S);
+    addCtrl(L"EDIT", L"", WS_BORDER | ES_NUMBER, 120, 490, 42, 24, IDC_EDIT_MODE_P);
+    addCtrl(L"STATIC", L"风速", 0, 180, 492, 40, 20, 0);
+    addCtrl(L"EDIT", L"", WS_BORDER | ES_NUMBER, 224, 490, 42, 24, IDC_EDIT_FAN_S);
+    addCtrl(L"EDIT", L"", WS_BORDER | ES_NUMBER, 270, 490, 42, 24, IDC_EDIT_FAN_P);
+
+    // 温度 / 摆风 行
+    addCtrl(L"STATIC", L"温度", 0, 30,  522, 40, 20, 0);
+    addCtrl(L"EDIT", L"", WS_BORDER | ES_NUMBER, 74,  520, 42, 24, IDC_EDIT_TEMP_S);
+    addCtrl(L"EDIT", L"", WS_BORDER | ES_NUMBER, 120, 520, 42, 24, IDC_EDIT_TEMP_P);
+    addCtrl(L"STATIC", L"摆风", 0, 180, 522, 40, 20, 0);
+    addCtrl(L"EDIT", L"", WS_BORDER | ES_NUMBER, 224, 520, 42, 24, IDC_EDIT_SWING_S);
+    addCtrl(L"EDIT", L"", WS_BORDER | ES_NUMBER, 270, 520, 42, 24, IDC_EDIT_SWING_P);
+    addCtrl(L"STATIC", L"（siid / piid 按设备型号调整；不确定可留默认并用面板“测试指令”验证）",
+            SS_LEFT, 318, 500, 160, 40, 0);
 
     // ─── 底部按钮 ───
-    addCtrl(L"BUTTON", L"确定", BS_DEFPUSHBUTTON, 270, 445, 100, 32, IDC_BTN_OK);
-    addCtrl(L"BUTTON", L"取消", BS_PUSHBUTTON,    380, 445, 100, 32, IDC_BTN_CANCEL);
+    addCtrl(L"BUTTON", L"确定", BS_DEFPUSHBUTTON, 270, 600, 100, 32, IDC_BTN_OK);
+    addCtrl(L"BUTTON", L"取消", BS_PUSHBUTTON,    380, 600, 100, 32, IDC_BTN_CANCEL);
+
+    // ─── 填充空调控制配置 ───
+    auto& acfg = ConfigManager::Instance().Get();
+    SendMessageW(GetDlgItem(hWnd, IDC_CHECK_AC), BM_SETCHECK,
+                 acfg.enableAcControl ? BST_CHECKED : BST_UNCHECKED, 0);
+    std::wstring mdl = acfg.acModel.empty() ? L"未知（可用面板“探测型号”）" : acfg.acModel;
+    SetWindowTextW(GetDlgItem(hWnd, IDC_STATIC_ACMODEL), (L"型号：" + mdl).c_str());
+    auto setInt = [&](int id, int v) {
+        wchar_t b[16]; _itow_s(v, b, 16); SetWindowTextW(GetDlgItem(hWnd, id), b);
+    };
+    setInt(IDC_EDIT_MODE_S,  acfg.acModeSiid);  setInt(IDC_EDIT_MODE_P,  acfg.acModePiid);
+    setInt(IDC_EDIT_TEMP_S,  acfg.acTempSiid);  setInt(IDC_EDIT_TEMP_P,  acfg.acTempPiid);
+    setInt(IDC_EDIT_FAN_S,   acfg.acFanSiid);   setInt(IDC_EDIT_FAN_P,   acfg.acFanPiid);
+    setInt(IDC_EDIT_SWING_S, acfg.acSwingSiid); setInt(IDC_EDIT_SWING_P, acfg.acSwingPiid);
 
     // ─── 填充现有配置 ───
     auto& cfg = ConfigManager::Instance().Get();
@@ -161,6 +215,17 @@ static bool SaveFromDialog(DlgState* st) {
     cfg.decimalPlaces   = (int)SendMessageW(st->hComboDecimal, CB_GETCURSEL, 0, 0);
     if (cfg.decimalPlaces < 0) cfg.decimalPlaces = 1;
 
+    // 空调控制配置
+    cfg.enableAcControl = (SendMessageW(GetDlgItem(st->hDlg, IDC_CHECK_AC), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    auto getInt = [&](int id, int def) {
+        wchar_t b[32]; GetWindowTextW(GetDlgItem(st->hDlg, id), b, 32);
+        try { return std::stoi(b); } catch (...) { return def; }
+    };
+    cfg.acModeSiid  = getInt(IDC_EDIT_MODE_S,  2); cfg.acModePiid  = getInt(IDC_EDIT_MODE_P,  2);
+    cfg.acTempSiid  = getInt(IDC_EDIT_TEMP_S,  2); cfg.acTempPiid  = getInt(IDC_EDIT_TEMP_P,  3);
+    cfg.acFanSiid   = getInt(IDC_EDIT_FAN_S,   2); cfg.acFanPiid   = getInt(IDC_EDIT_FAN_P,   4);
+    cfg.acSwingSiid = getInt(IDC_EDIT_SWING_S, 2); cfg.acSwingPiid = getInt(IDC_EDIT_SWING_P, 5);
+
     ConfigManager::Instance().Save();
     return true;
 }
@@ -176,6 +241,7 @@ static LRESULT CALLBACK DlgWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
         CREATESTRUCTW* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
         st = reinterpret_cast<DlgState*>(cs->lpCreateParams);
         SetWindowLongPtrW(hWnd, GWLP_USERDATA, (LONG_PTR)st);
+        st->hDlg = hWnd;
         CreateControls(hWnd, st);
         return 0;
     }
@@ -230,6 +296,8 @@ static LRESULT CALLBACK DlgWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
                 DeleteFileW(path.c_str());
                 SetWindowTextW(st->hStaticStatus, L"历史记录已清除");
             }
+        } else if (id == IDC_BTN_DASHBOARD) {
+            if (auto* p = MijiaPluginInstance()) p->OpenDashboard(NULL);
         }
         break;
     }
@@ -276,7 +344,7 @@ bool COptionsDlg::Show(HWND hParent) {
     // 计算居中坐标 - 宽敞的大窗口布局（按 DPI 缩放）
     UINT dpi = GetWindowDpi(hParent ? hParent : nullptr);
     int W = MulDiv(520, dpi, 96);
-    int H = MulDiv(540, dpi, 96);
+    int H = MulDiv(660, dpi, 96);
     int px = CW_USEDEFAULT, py = CW_USEDEFAULT;
     if (hParent) {
         RECT rc{};
@@ -290,7 +358,7 @@ bool COptionsDlg::Show(HWND hParent) {
     HWND hDlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
         L"MijiaPowerOptDlg",
-        L"米家插座功率插件 - 设置",
+        L"米家空调伴侣 - 设置",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
         px, py, W, H,
         hParent, NULL, hInst,

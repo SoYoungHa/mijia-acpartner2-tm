@@ -536,3 +536,132 @@ bool MiioDevice::GetPower(double& outWatts) {
     catch (...) { outWatts = 0.0; return true; }
     return true;
 }
+
+// ════════════════════════════════════════
+// 空调伴侣控制方法
+// ════════════════════════════════════════
+
+bool MiioDevice::SetPower(bool on) {
+    // 旧协议：set_power ["on"] / ["off"]，对空调伴侣最可靠（红外转发）
+    std::string params = std::string("[\"") + (on ? "on" : "off") + "\"]";
+    std::string result;
+    return Send("set_power", params, result);
+}
+
+bool MiioDevice::GetPowerState(std::string& outState) {
+    std::string result;
+    if (!Send("get_prop", "[\"power\"]", result)) return false;
+    // 形如 ["on"] 或 "on"
+    auto lb = result.find('"');
+    if (lb == std::string::npos) return false;
+    auto rb = result.find('"', lb + 1);
+    outState = (rb == std::string::npos) ? result.substr(lb + 1)
+                                         : result.substr(lb + 1, rb - lb - 1);
+    return true;
+}
+
+bool MiioDevice::GetDeviceInfo(std::string& outModel) {
+    std::string result;
+    if (!Send("get_device_info", "[]", result)) return false;
+    auto p = result.find("\"model\"");
+    if (p == std::string::npos) return false;
+    // 定位 "model" 之后的冒号，再找值字符串的首个引号
+    auto colon = result.find(':', p + 7);
+    if (colon == std::string::npos) return false;
+    size_t q = colon + 1;
+    while (q < result.size() && (result[q] == ' ' || result[q] == '\t')) q++;
+    if (q >= result.size() || result[q] != '"') return false;
+    auto end = result.find('"', q + 1);
+    if (end == std::string::npos) return false;
+    outModel = result.substr(q + 1, end - q - 1);
+    return true;
+}
+
+bool MiioDevice::GetProperties(const std::vector<MiioProperty>& props, std::string& outResult) {
+    if (props.empty()) return false;
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < props.size(); ++i) {
+        if (i) oss << ",";
+        oss << "{\"did\":\"MYDID\",\"siid\":" << props[i].siid
+            << ",\"piid\":" << props[i].piid << "}";
+    }
+    oss << "]";
+    std::string r;
+    if (!Send("get_properties", oss.str(), r)) return false;
+    outResult = r;
+    return true;
+}
+
+bool MiioDevice::SetProperties(const std::vector<MiioPropValue>& vals, std::string& outResult) {
+    if (vals.empty()) return false;
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < vals.size(); ++i) {
+        if (i) oss << ",";
+        oss << "{\"did\":\"MYDID\",\"siid\":" << vals[i].siid
+            << ",\"piid\":" << vals[i].piid
+            << ",\"value\":" << vals[i].valueJson << "}";
+    }
+    oss << "]";
+    std::string r;
+    if (!Send("set_properties", oss.str(), r)) return false;
+    outResult = r;
+    return true;
+}
+
+std::vector<MiioPropResult> MiioDevice::ParsePropResults(const std::string& result) {
+    std::vector<MiioPropResult> out;
+    // 定位 result 数组
+    size_t pos = result.find("\"result\"");
+    std::string arr = (pos == std::string::npos) ? result : result.substr(pos + 8);
+    size_t start = arr.find('[');
+    if (start == std::string::npos) return out;
+
+    size_t cur = start + 1;
+    while (cur < arr.size()) {
+        size_t objStart = arr.find('{', cur);
+        if (objStart == std::string::npos) break;
+        // 找到匹配的 }
+        int depth = 0;
+        size_t j = objStart;
+        for (; j < arr.size(); ++j) {
+            if (arr[j] == '{') depth++;
+            else if (arr[j] == '}') { depth--; if (depth == 0) break; }
+        }
+        std::string obj = arr.substr(objStart, j - objStart + 1);
+        MiioPropResult r;
+
+        auto grabInt = [&](const char* key, int& dst) {
+            std::string k = key;
+            auto p = obj.find(k);
+            if (p != std::string::npos) {
+                try { dst = std::stoi(obj.substr(p + k.size())); } catch (...) {}
+            }
+        };
+        grabInt("\"siid\":", r.siid);
+        grabInt("\"piid\":", r.piid);
+        grabInt("\"code\":", r.code);
+
+        auto pv = obj.find("\"value\"");
+        if (pv != std::string::npos) {
+            size_t v = pv + 7;
+            while (v < obj.size() && (obj[v] == ' ' || obj[v] == '\t')) v++;
+            std::string val;
+            int d = 0;
+            for (size_t k = v; k < obj.size(); ++k) {
+                char c = obj[k];
+                if (c == '{' || c == '[') d++;
+                else if (c == '}' || c == ']') { if (d == 0) break; d--; }
+                else if (c == ',' && d == 0) break;
+                else if (c == '}' && d == 0) break;
+                val += c;
+            }
+            r.value = val;
+        }
+        r.valid = true;
+        out.push_back(r);
+        cur = j + 1;
+    }
+    return out;
+}

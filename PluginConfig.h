@@ -20,6 +20,17 @@ struct PluginConfig {
     // 今日用电量（本地按功率积分估算）
     double       energyTodayWh = 0.0; // 今日累计 Wh
     std::wstring energyDate;          // 今日日期 YYYYMMDD，跨天清零用
+
+    // ── 空调控制（米家空调伴侣）──
+    bool        enableAcControl = false;   // 是否启用空调控制面板
+    std::wstring acModel;                  // 设备 model（探测后写入）
+
+    // MIoT SPEC 属性映射（siid/piid），默认按 lumi.acpartner.mcn02 / 通用空调服务
+    // 不同固件可能不同，可在选项或 INI [ACMap] 中调整
+    int acModeSiid  = 2, acModePiid  = 2;  // 模式
+    int acTempSiid  = 2, acTempPiid  = 3;  // 目标温度
+    int acFanSiid   = 2, acFanPiid   = 4;  // 风速
+    int acSwingSiid = 2, acSwingPiid = 5;  // 摆风（垂直）
 };
 
 class ConfigManager {
