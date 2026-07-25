@@ -381,11 +381,8 @@ void CDashboardDlg::OnTimer(HWND hWnd, Ctx* ctx) {
     InvalidateRect(hWnd, &prc, TRUE);
     InvalidateRect(hWnd, &erc, TRUE);
 
-    // 每 5 次（约10秒）自动刷新空调状态
-    if (ctx->acEnabled) {
-        ctx->acCnt++;
-        if (ctx->acCnt >= 5) { ctx->acCnt = 0; RefreshAc(ctx); }
-    }
+    // 注意：不再在定时器里自动 RefreshAc——那会在 UI 线程同步执行 RPC（最高 5s），
+    // 导致面板周期性卡顿。空调状态改为按需刷新（打开面板时一次 + 手动点“刷新”）。
 }
 
 // ─── 窗口过程 ───
@@ -429,32 +426,32 @@ LRESULT CALLBACK CDashboardDlg::DlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
                 SetWindowTextW(ctx->hErr, on ? L"已发送开机指令" : L"已发送关机指令");
             else
                 SetWindowTextW(ctx->hErr, ctx->ac.lastError.c_str());
-            RefreshAc(ctx);
+            UpdateAcUi(ctx);
         } else if (id == IDC_BTN_TDN) {
             int t = ctx->ac.temp; if (t < 0) t = 26; if (t > 16) t--;
             if (ctx->plugin->AcSetTemp(t, ctx->ac)) SetWindowTextW(ctx->hErr, L"温度已设置");
             else SetWindowTextW(ctx->hErr, ctx->ac.lastError.c_str());
-            RefreshAc(ctx);
+            UpdateAcUi(ctx);
         } else if (id == IDC_BTN_TUP) {
             int t = ctx->ac.temp; if (t < 0) t = 26; if (t < 30) t++;
             if (ctx->plugin->AcSetTemp(t, ctx->ac)) SetWindowTextW(ctx->hErr, L"温度已设置");
             else SetWindowTextW(ctx->hErr, ctx->ac.lastError.c_str());
-            RefreshAc(ctx);
+            UpdateAcUi(ctx);
         } else if (id == IDC_BTN_SWING) {
             int s = (ctx->ac.swing == 1) ? 0 : 1;
             if (ctx->plugin->AcSetSwing(s, ctx->ac)) SetWindowTextW(ctx->hErr, L"摆风已设置");
             else SetWindowTextW(ctx->hErr, ctx->ac.lastError.c_str());
-            RefreshAc(ctx);
+            UpdateAcUi(ctx);
         } else if (id == IDC_COMBO_MODE && HIWORD(wParam) == CBN_SELCHANGE) {
             int m = (int)SendMessageW(ctx->hMode, CB_GETCURSEL, 0, 0);
             if (ctx->plugin->AcSetMode(m, ctx->ac)) SetWindowTextW(ctx->hErr, L"模式已设置");
             else SetWindowTextW(ctx->hErr, ctx->ac.lastError.c_str());
-            RefreshAc(ctx);
+            UpdateAcUi(ctx);
         } else if (id == IDC_COMBO_FAN && HIWORD(wParam) == CBN_SELCHANGE) {
             int f = (int)SendMessageW(ctx->hFan, CB_GETCURSEL, 0, 0);
             if (ctx->plugin->AcSetFan(f, ctx->ac)) SetWindowTextW(ctx->hErr, L"风速已设置");
             else SetWindowTextW(ctx->hErr, ctx->ac.lastError.c_str());
-            RefreshAc(ctx);
+            UpdateAcUi(ctx);
         } else if (id == IDC_BTN_REFRESH) {
             RefreshAc(ctx);
             SetWindowTextW(ctx->hErr, ctx->ac.lastError.empty() ? L"已刷新" : ctx->ac.lastError.c_str());

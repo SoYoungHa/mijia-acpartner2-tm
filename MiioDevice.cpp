@@ -595,6 +595,46 @@ bool MiioDevice::GetDeviceInfo(std::string& outModel) {
     return true;
 }
 
+bool MiioDevice::GetModelAndState(std::string& outModel, std::string& outState, int& outPower) {
+    // lumi 空调伴侣旧协议：get_model_and_state [] -> ["acModelCode","state",power]
+    std::string result;
+    if (!Send("get_model_and_state", "[]", result)) return false;
+    DebugLog("get_model_and_state resp: " + result);
+    // 收集所有引号字符串（第1个=model码，第2个=state）
+    std::vector<std::string> strs;
+    for (size_t i = 0; i < result.size();) {
+        size_t q = result.find('"', i);
+        if (q == std::string::npos) break;
+        size_t q2 = result.find('"', q + 1);
+        if (q2 == std::string::npos) break;
+        strs.push_back(result.substr(q + 1, q2 - q - 1));
+        i = q2 + 1;
+    }
+    if (strs.size() < 2) return false;
+    outModel = strs[0];
+    outState = strs[1];
+    // power：取结果中最后一个数字串
+    outPower = -1;
+    size_t p = result.find_last_of("0123456789");
+    if (p != std::string::npos) {
+        size_t s = p;
+        while (s > 0 && result[s - 1] >= '0' && result[s - 1] <= '9') s--;
+        try { outPower = std::stoi(result.substr(s, p - s + 1)); }
+        catch (...) { outPower = -1; }
+    }
+    return true;
+}
+
+bool MiioDevice::SendCmd(const std::string& code) {
+    // send_cmd ["code"] -> 成功返回 ["ok"]
+    std::string params = "[\"" + code + "\"]";
+    DebugLog("send_cmd req: " + params);
+    std::string result;
+    if (!Send("send_cmd", params, result)) { DebugLog("send_cmd: 通信失败"); return false; }
+    DebugLog("send_cmd resp: " + result);
+    return result.find("ok") != std::string::npos;
+}
+
 bool MiioDevice::GetProperties(const std::vector<MiioProperty>& props, std::string& outResult) {
     if (props.empty()) return false;
     std::ostringstream oss;
