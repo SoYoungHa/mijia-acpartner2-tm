@@ -33,6 +33,10 @@ using namespace Gdiplus;
 #define IDC_STATIC_AC    2030
 #define IDC_STATIC_ERR   2031
 
+// 用于居中重定位的无 ID 静态标签（用 ID 才能 GetDlgItem）
+#define IDC_STATIC_MODE_LABEL 2033
+#define IDC_STATIC_FAN_LABEL  2034
+
 static const wchar_t* MODE_LABELS[] = { L"自动", L"制冷", L"除湿", L"送风", L"制热" };
 static const wchar_t* FAN_LABELS[]  = { L"自动", L"低", L"中", L"高" };
 
@@ -104,6 +108,46 @@ static HWND AddCtrl(HWND parent, LPCWSTR cls, LPCWSTR text, DWORD style,
         (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), NULL);
     if (hw && hFont) SendMessageW(hw, WM_SETFONT, (WPARAM)hFont, TRUE);
     return hw;
+}
+
+// ─── 内容居中：全屏/拉宽时左右留白 ───
+static const int NATURAL_W = 840;   // 自然宽度（逻辑像素）
+static int  g_ox = 0;               // 当前内容水平偏移
+
+struct CL { int id; int lx, ly, lw, lh; };
+static const CL g_cl[] = {
+    { IDC_BTN_10M,         20,  60,  92,  28 },
+    { IDC_BTN_1H,         120,  60,  92,  28 },
+    { IDC_BTN_24H,        220,  60,  92,  28 },
+    { IDC_BTN_7D,         320,  60,  92,  28 },
+    { IDC_BTN_POWER,       28, 520, 118,  34 },
+    { IDC_BTN_TDN,        170, 520,  32,  34 },
+    { IDC_STATIC_TEMP,    208, 520,  76,  34 },
+    { IDC_BTN_TUP,        290, 520,  32,  34 },
+    { IDC_STATIC_MODE_LABEL,344,520,  38,  34 },
+    { IDC_COMBO_MODE,     386, 520, 118, 200 },
+    { IDC_STATIC_FAN_LABEL,518, 520,  38,  34 },
+    { IDC_COMBO_FAN,      560, 520, 110, 200 },
+    { IDC_BTN_SWING,      686, 520, 118,  34 },
+    { IDC_BTN_REFRESH,     28, 612,  86,  28 },
+    { IDC_BTN_DETECT,     122, 612, 104,  28 },
+    { IDC_BTN_TEST,       236, 612,  86,  28 },
+    { IDC_STATIC_AC,      332, 612, 472,  28 },
+    { IDC_STATIC_ERR,      28, 654, 780,  24 },
+};
+
+static void RecenterControls(HWND hWnd) {
+    UINT dpi = GetWindowDpi(hWnd);
+    auto S = [dpi](int v) { return MulDiv(v, dpi, 96); };
+    RECT crc; GetClientRect(hWnd, &crc);
+    int natW = S(NATURAL_W);
+    int ox = (crc.right > natW) ? (crc.right - natW) / 2 : 0;
+    if (ox == g_ox) return;        // 无变化就不动
+    g_ox = ox;
+    for (const auto& c : g_cl) {
+        HWND hw = GetDlgItem(hWnd, c.id);
+        if (hw) MoveWindow(hw, ox + S(c.lx), S(c.ly), S(c.lw), S(c.lh), TRUE);
+    }
 }
 
 // 圆角矩形路径
@@ -203,11 +247,11 @@ void CDashboardDlg::OnInitDialog(HWND hWnd, Ctx* ctx) {
     ctx->hTemp  = AddCtrl(hWnd, L"STATIC", L"--℃", SS_CENTER | SS_CENTERIMAGE, S(208), y1, S(76), S(34), IDC_STATIC_TEMP, g_hFontBig);
     AddCtrl(hWnd, L"BUTTON", L"+", BTN, S(290), y1, S(32), S(34), IDC_BTN_TUP, g_hFont);
 
-    AddCtrl(hWnd, L"STATIC", L"模式", 0, S(344), y1, S(38), S(34), 0, g_hFont);
+    AddCtrl(hWnd, L"STATIC", L"模式", 0, S(344), y1, S(38), S(34), IDC_STATIC_MODE_LABEL, g_hFont);
     ctx->hMode  = AddCtrl(hWnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST, S(386), y1, S(118), S(200), IDC_COMBO_MODE, g_hFont);
     for (int i = 0; i < 5; i++) SendMessageW(ctx->hMode, CB_ADDSTRING, 0, (LPARAM)MODE_LABELS[i]);
 
-    AddCtrl(hWnd, L"STATIC", L"风速", 0, S(518), y1, S(38), S(34), 0, g_hFont);
+    AddCtrl(hWnd, L"STATIC", L"风速", 0, S(518), y1, S(38), S(34), IDC_STATIC_FAN_LABEL, g_hFont);
     ctx->hFan   = AddCtrl(hWnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST, S(560), y1, S(110), S(200), IDC_COMBO_FAN, g_hFont);
     for (int i = 0; i < 4; i++) SendMessageW(ctx->hFan, CB_ADDSTRING, 0, (LPARAM)FAN_LABELS[i]);
 
@@ -229,6 +273,8 @@ void CDashboardDlg::OnInitDialog(HWND hWnd, Ctx* ctx) {
         }
         SetWindowTextW(ctx->hErr, L"提示：在插件“选项”中勾选“启用空调控制”后即可使用控制面板。");
     }
+
+    RecenterControls(hWnd);   // 初次居中（创建时窗口 840 宽，ox=0 无变化；后续 WM_SIZE 会重新居中）
 
     SetTimer(hWnd, 1, 2000, NULL);
 }
@@ -423,26 +469,26 @@ void CDashboardDlg::DrawCharts(HWND hWnd, Ctx* ctx) {
     SetBkMode(hdc, TRANSPARENT);
     SelectObject(hdc, g_hFontTitle);
     SetTextColor(hdc, g_theme.text);
-    TextOutW(hdc, S(20), S(12), L"米家空调伴侣", 6);
+    TextOutW(hdc, g_ox + S(20), S(12), L"米家空调伴侣", 6);
     SelectObject(hdc, g_hFont);
     SetTextColor(hdc, g_theme.sub);
     std::wstring st = L"设备：" + ConfigManager::Instance().Get().deviceName
         + (ctx->plugin->IsConnected() ? L"  ●已连接" : L"  ○未连接")
         + L"  " + std::to_wstring((int)ctx->plugin->GetCurrentWatts()) + L"W"
         + L"  今日" + std::to_wstring(ctx->plugin->GetTodayKwh()) + L"度";
-    TextOutW(hdc, S(20), S(38), st.c_str(), (int)st.size());
+    TextOutW(hdc, g_ox + S(20), S(38), st.c_str(), (int)st.size());
 
     std::vector<double> powerYs, energyYs;
     double t0, t1, todayKwh;
     BuildSeries(ctx, powerYs, energyYs, t0, t1, todayKwh);
 
-    // 右边界跟随窗口宽度（支持拉宽），左边界固定 S(20)
-    RECT crc; GetClientRect(hWnd, &crc);
-    int right = crc.right - S(20);
-    RECT prc = { S(20), S(96),  right, S(280) };
-    RECT erc = { S(20), S(290), right, S(474) };
+    // 内容居中：跟随 g_ox（窗口拉宽时左右留白）
+    int left  = g_ox + S(20);
+    int right = g_ox + S(820);
+    RECT prc = { left, S(96),  right, S(280) };
+    RECT erc = { left, S(290), right, S(474) };
     // AC 卡片边框
-    RECT arc = { S(20), S(484), right, S(684) };
+    RECT arc = { left, S(484), right, S(684) };
 
     double pMax = 0.0;
     for (double v : powerYs) if (v > pMax) pMax = v;
@@ -626,7 +672,8 @@ LRESULT CALLBACK CDashboardDlg::DlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
         if (ctx) OnTimer(hWnd, ctx);
         break;
     case WM_SIZE:
-        InvalidateRect(hWnd, NULL, FALSE);   // 窗口大小变化时重绘，图表跟随宽度
+        RecenterControls(hWnd);   // 窗口大小变化：控件水平居中
+        InvalidateRect(hWnd, NULL, TRUE);   // 擦除旧画布，画布以新 ox 重绘（避免残留）
         break;
     case WM_PAINT:
         if (ctx) DrawCharts(hWnd, ctx);
