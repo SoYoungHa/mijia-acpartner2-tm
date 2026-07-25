@@ -55,12 +55,17 @@ ModeSiid=2
 ModePiid=2
 TempSiid=2
 TempPiid=3
-FanSiid=2
-FanPiid=4
-SwingSiid=2
-SwingPiid=5
+FanSiid=3
+FanPiid=1
+SwingSiid=3
+SwingPiid=2
 ```
+
+> ℹ️ 以上为 `lumi.acpartner.mcn02` 官方 SPEC 映射：空调服务 `air-conditioner(#2)` 含 mode(2/2)、target-temperature(2/3, float)；风机服务 `fan-control(#3)` 含 fan-level(3/1)、vertical-swing(3/2, bool)。旧版本误把 fan/swing 设为 siid=2，v1.1.1 起已修正，并在加载时自动迁移旧配置。
+
 面板上的 **测试指令** 按钮会读取一次状态并返回码：`0` 表示映射正确。
+
+> 🔍 排查：若调节仍无效，插件会在配置目录生成 `MijiaPower_debug.log`，记录每次 `get_properties`/`set_properties` 的原始请求与设备响应，可据此核对 siid/piid 或错误码。
 
 ---
 

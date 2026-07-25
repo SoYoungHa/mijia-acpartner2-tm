@@ -225,8 +225,8 @@ void CDashboardDlg::UpdateAcUi(Ctx* ctx) {
         + L"  摆风:" + (ctx->ac.swing == 1 ? L"开" : (ctx->ac.swing == 0 ? L"关" : L"?"));
     SetWindowTextW(ctx->hAcStatus, s.c_str());
 
-    if (!ctx->ac.lastError.empty())
-        SetWindowTextW(ctx->hErr, ctx->ac.lastError.c_str());
+    // 注意：不在此处用 lastError 覆盖 hErr，避免“设置成功”提示被随后的状态读回失败盖掉。
+    // 错误信息由 Refresh / Test 按钮或各设置按钮自行写入 hErr。
 }
 
 // ─── 构建图表序列 ───

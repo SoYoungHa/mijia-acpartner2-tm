@@ -159,6 +159,7 @@ void CMijiaPowerPlugin::OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* da
             m_initialized = true;
             ConfigManager::Instance().SetConfigDir(data);
             ConfigManager::Instance().Load();
+            MiioDevice::SetDebugLogPath(ConfigManager::Instance().GetConfigDir() + L"\\MijiaPower_debug.log");
 
             auto& cfg = ConfigManager::Instance().Get();
             if (cfg.enableRecording) {
@@ -329,6 +330,7 @@ void CMijiaPowerPlugin::DataRequired() {
         GetCurrentDirectoryW(MAX_PATH, buf);
         ConfigManager::Instance().SetConfigDir(buf);
         ConfigManager::Instance().Load();
+        MiioDevice::SetDebugLogPath(ConfigManager::Instance().GetConfigDir() + L"\\MijiaPower_debug.log");
         auto& cfg = ConfigManager::Instance().Get();
         if (cfg.enableRecording) {
             m_history.LoadFromFile(ConfigManager::Instance().GetHistoryFilePath());
@@ -345,7 +347,7 @@ const wchar_t* CMijiaPowerPlugin::GetInfo(PluginInfoIndex index) {
     case TMI_AUTHOR:      return L"MijiaPlug";
     case TMI_COPYRIGHT:   return L"2024 MijiaPlug";
     case TMI_URL:         return L"";
-    case TMI_VERSION:     return L"1.1.0";
+    case TMI_VERSION:     return L"1.1.1";
     default:              return L"";
     }
 }
@@ -374,7 +376,7 @@ namespace {
         for (char c : s) w.push_back((wchar_t)(unsigned char)c);
         return w;
     }
-    // 解析属性值（可能是数字、浮点或带引号的字符串）为整数
+    // 解析属性值（可能是数字、浮点、布尔或带引号的字符串）为整数
     bool ToIntVal(const std::string& v, int& out) {
         if (v.empty()) return false;
         std::string t = v;
@@ -383,7 +385,10 @@ namespace {
         while (a < b && (t[a] == '"' || t[a] == ' ' || t[a] == '\t')) a++;
         while (b > a && (t[b-1] == '"' || t[b-1] == ' ' || t[b-1] == '\t')) b--;
         if (a >= b) return false;
-        try { out = (int)std::stod(t.substr(a, b - a)); return true; }
+        std::string s = t.substr(a, b - a);
+        if (s == "true")  { out = 1; return true; }   // bool 属性（如摆风）
+        if (s == "false") { out = 0; return true; }
+        try { out = (int)std::stod(s); return true; }
         catch (...) { return false; }
     }
 }
@@ -471,7 +476,7 @@ bool CMijiaPowerPlugin::AcRefreshState(AcState& out) {
     auto parsed = MiioDevice::ParsePropResults(result);
     if (parsed.empty()) {
         out.lastCode = -1;
-        out.lastError = L"设备未返回属性（siid/piid 可能不正确）";
+        out.lastError = L"设备未返回属性（siid/piid 可能不正确，或该设备不支持状态读取）";
         return false;
     }
     for (auto& r : parsed) {
@@ -524,7 +529,8 @@ bool CMijiaPowerPlugin::AcSetSwing(int s, AcState& out) {
     out.lastError.clear(); out.lastCode = 0;
     auto& cfg = ConfigManager::Instance().Get();
     if (!AcEnsureConnected()) { out.lastError = L"设置失败：设备未连接"; return false; }
-    std::vector<MiioPropValue> vals = { { cfg.acSwingSiid, cfg.acSwingPiid, std::to_string(s) } };
+    // 摆风为 bool 属性，value 需用 true/false
+    std::vector<MiioPropValue> vals = { { cfg.acSwingSiid, cfg.acSwingPiid, (s ? "true" : "false") } };
     std::string result;
     if (!DeviceSetProperties(vals, result)) { out.lastError = L"设置失败：通信错误"; return false; }
     int code = ParseFirstCode(result); out.lastCode = code;

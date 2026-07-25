@@ -346,6 +346,24 @@ bool Decrypt(const unsigned char key[16], const unsigned char iv[16],
 // MiioDevice 实现
 // ════════════════════════════════════════
 
+std::wstring MiioDevice::s_debugLogPath;
+
+void MiioDevice::DebugLog(const std::string& s) {
+    if (s_debugLogPath.empty()) return;
+    HANDLE h = CreateFileW(s_debugLogPath.c_str(), FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    SYSTEMTIME st; GetLocalTime(&st);
+    std::ostringstream ts;
+    ts << "[" << st.wHour << ":" << st.wMinute << ":" << st.wSecond
+       << "." << st.wMilliseconds << "] " << s << "\r\n";
+    std::string line = ts.str();
+    DWORD written = 0;
+    WriteFile(h, line.c_str(), (DWORD)line.size(), &written, nullptr);
+    CloseHandle(h);
+}
+
 // HEX 字符串转字节
 static bool HexToBytes(const std::string& hex, unsigned char* out, size_t outLen) {
     if (hex.size() != outLen * 2) return false;
@@ -587,9 +605,12 @@ bool MiioDevice::GetProperties(const std::vector<MiioProperty>& props, std::stri
             << ",\"piid\":" << props[i].piid << "}";
     }
     oss << "]";
+    std::string params = oss.str();
+    DebugLog("get_properties req: " + params);
     std::string r;
-    if (!Send("get_properties", oss.str(), r)) return false;
+    if (!Send("get_properties", params, r)) { DebugLog("get_properties: Send/通信失败"); return false; }
     outResult = r;
+    DebugLog("get_properties resp: " + r);
     return true;
 }
 
@@ -604,9 +625,12 @@ bool MiioDevice::SetProperties(const std::vector<MiioPropValue>& vals, std::stri
             << ",\"value\":" << vals[i].valueJson << "}";
     }
     oss << "]";
+    std::string params = oss.str();
+    DebugLog("set_properties req: " + params);
     std::string r;
-    if (!Send("set_properties", oss.str(), r)) return false;
+    if (!Send("set_properties", params, r)) { DebugLog("set_properties: Send/通信失败"); return false; }
     outResult = r;
+    DebugLog("set_properties resp: " + r);
     return true;
 }
 
