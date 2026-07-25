@@ -211,7 +211,7 @@ void CDashboardDlg::Show(HWND hParent, CMijiaPowerPlugin* plugin) {
 
     UINT dpi = GetWindowDpi(hParent ? hParent : nullptr);
     int W = MulDiv(840, dpi, 96);
-    int H = MulDiv(720, dpi, 96);
+    int H = MulDiv(760, dpi, 96);   // 加大初始高度，确保空调控件完整可见
 
     int px = CW_USEDEFAULT, py = CW_USEDEFAULT;
     if (hParent) {
@@ -409,7 +409,7 @@ void CDashboardDlg::DrawChart(HDC hdc, RECT rc, const std::vector<double>& ys,
     // 当前值徽章（右上）
     wchar_t buf[64];
     if (ys.empty()) swprintf_s(buf, L"— %ls", unit);
-    else swprintf_s(buf, L"%.2f %ls", curVal, unit);
+    else swprintf_s(buf, L"%.1f %ls", curVal, unit);
     Font fontV(hdc, g_hFont);
     RectF vbox; g.MeasureString(buf, -1, &fontV, PointF(0,0), &vbox);
     REAL bw = vbox.Width + 20, bh = 22;
@@ -509,8 +509,10 @@ void CDashboardDlg::DrawCharts(HWND hWnd, Ctx* ctx) {
     SetTextColor(hdc, g_theme.sub);
     std::wstring st = L"设备：" + ConfigManager::Instance().Get().deviceName
         + (ctx->plugin->IsConnected() ? L"  ●已连接" : L"  ○未连接")
-        + L"  " + std::to_wstring((int)ctx->plugin->GetCurrentWatts()) + L"W"
-        + L"  今日" + std::to_wstring(ctx->plugin->GetTodayKwh()) + L"度";
+        + L"  " + std::to_wstring((int)ctx->plugin->GetCurrentWatts()) + L"W";
+    wchar_t ebuf[32];
+    swprintf_s(ebuf, L"%.1f", ctx->plugin->GetTodayKwh());
+    st += L"  今日"; st += ebuf; st += L"度";
     TextOutW(hdc, g_ox + S(20), S(38), st.c_str(), (int)st.size());
 
     std::vector<double> powerYs, energyYs;
@@ -708,7 +710,6 @@ LRESULT CALLBACK CDashboardDlg::DlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
         break;
     case WM_SIZE: {
         int newW = LOWORD(lParam);
-        int newH = HIWORD(lParam);
         if (newW <= 0) break;
         UINT dpi = GetWindowDpi(hWnd);
         int natW_phys = MulDiv(NATURAL_W, dpi, 96);
@@ -717,15 +718,9 @@ LRESULT CALLBACK CDashboardDlg::DlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
         if (newScale > 2.5f) newScale = 2.5f;
         bool scaleChanged = fabsf(newScale - g_scale) > 0.02f;
         g_scale = newScale;
-        // 维持宽高比：按自然比例重设高度
-        int wantH = (int)(MulDiv(NATURAL_H, dpi, 96) * g_scale);
-        if (wantH < 200) wantH = 200;
-        if (newH != wantH) {
-            RECT wr; GetWindowRect(hWnd, &wr);
-            SetWindowPos(hWnd, NULL, wr.left, wr.top, newW, wantH, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
+        // 高度自由（去掉宽高比锁定），用户可任意拖动；内容随宽度缩放
         if (scaleChanged) RecreateFonts(hWnd);
-        RecenterControls(hWnd);   // 按新 g_scale 重新居中控件
+        RecenterControls(hWnd);
         InvalidateRect(hWnd, NULL, TRUE);
         break;
     }
