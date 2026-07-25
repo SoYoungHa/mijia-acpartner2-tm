@@ -19,8 +19,8 @@ public:
     const wchar_t* GetItemValueText()       const override;
     const wchar_t* GetItemValueSampleText() const override { return L"9999.9W"; }
 
-    // 在任务栏内联绘制功率迷你图
-    bool IsDrawResourceUsageGraph() const override { return true; }
+    // 在任务栏内联绘制功率迷你图（基类返回 int：0 不绘 / 非0 绘制）
+    int IsDrawResourceUsageGraph() const override { return 1; }
     float GetResourceUsageGraphValue() const override;
 
     // 双击打开图表/控制面板
