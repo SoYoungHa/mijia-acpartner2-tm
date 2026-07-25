@@ -3,6 +3,7 @@ bin/
 obj/
 Release/
 Debug/
+dist/
 *.dll
 *.lib
 *.exe
